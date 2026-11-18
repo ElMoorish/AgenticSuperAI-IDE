@@ -1,14 +1,15 @@
-"""End-to-end smoke test: mock llama-server (SSE) + fake editor client, real agent binary.
+"""End-to-end smoke test (also covers structured tool events, usage and real cancel): mock llama-server (SSE) + fake editor client, real agent binary.
 Run: cargo build && python scripts/smoke.py
 Checks streaming, tool-call repair, read_file and edit_file_search_replace through the editor,
 permission rejection, and Plan-mode edit blocking."""
-import json, os, subprocess, sys, tempfile, threading
+import json, os, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Modes: native = agent sends `tools`, mock answers with tool_calls deltas;
+# Modes: cancel = slow-streaming mock; session/cancel must end the turn with stopReason "cancelled" within 500 ms.
+#        native = agent sends `tools`, mock answers with tool_calls deltas;
 #        xml = ASA_TOOL_MODE=xml; fallback = mock rejects `tools` with HTTP 400 and the agent must retry in XML.
 if len(sys.argv) < 2:
-    for mode in ("native", "xml", "fallback"):
+    for mode in ("native", "xml", "fallback", "cancel"):
         print(f"=== mode: {mode}")
         if subprocess.run([sys.executable, "-I", os.path.abspath(__file__), mode]).returncode: sys.exit(1)
     print("ALL MODES PASSED"); sys.exit(0)
@@ -18,6 +19,7 @@ seen = {"tools": 0, "rejected": 0, "xml_prompt_with_tools": 0, "native_prompt_wi
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "target", "debug", "agent-core.exe" if os.name == "nt" else "agent-core")
 tmp = tempfile.mkdtemp()
+events = []  # structured session/update notifications other than message chunks
 ran = []  # commands the agent actually launched in the (fake) terminal
 target = os.path.join(tmp, "a.txt")
 open(target, "w").write("hello\nworld\n")
@@ -64,6 +66,15 @@ class H(BaseHTTPRequestHandler):
                 self.send_response(400); self.end_headers(); self.wfile.write(b'{"error":"does not support tools"}'); return
         elif MODE == "native" or "<tool_call>" not in sysmsg:
             seen["xml_prompt_with_tools"] += 1  # a request without tools whose prompt lacks the XML format
+        if MODE == "cancel":
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            try:
+                for i in range(200):
+                    self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": f"word{i} "}}]}) + "\n\n").encode()); self.wfile.flush()
+                    time.sleep(0.1)
+                self.wfile.write(b"data: [DONE]\n\n")
+            except OSError: pass  # the agent hung up after cancel
+            return
         text = script(body["messages"])
         self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
         if has_tools and text.startswith("<tool_call>"):
@@ -93,7 +104,9 @@ def rpc(i, method, params, allow=True):
     while True:
         m = json.loads(p.stdout.readline())
         if m.get("method") == "session/update":
-            chunks.append(m["params"]["update"]["content"]["text"])
+            u = m["params"]["update"]
+            if u["sessionUpdate"] == "agent_message_chunk": chunks.append(u["content"]["text"])
+            else: events.append(u)
         elif "method" in m:  # request from the agent to the editor
             calls.append(m["method"]); pr = m["params"]
             if m["method"] == "fs/read_text_file":
@@ -120,8 +133,31 @@ rpc(1, "initialize", {})
 sid = rpc(2, "session/new", {"cwd": tmp})[0]["result"]["sessionId"]
 prompt = lambda t, mode: {"sessionId": sid, "mode": mode, "prompt": [{"type": "text", "text": t}]}
 
+if MODE == "cancel":
+    send({"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": prompt("write a lot", "plan")})
+    while True:  # wait until the model is actually streaming
+        m = json.loads(p.stdout.readline())
+        if m.get("method") == "session/update" and m["params"]["update"]["sessionUpdate"] == "agent_message_chunk": break
+    t0 = time.time()
+    send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}})
+    while True:
+        m = json.loads(p.stdout.readline())
+        if m.get("id") == 3: break
+    dt = time.time() - t0
+    check(m["result"]["stopReason"] == "cancelled", "cancel: stopReason is cancelled")
+    check(dt < 0.5, f"cancel: turn ended in {dt*1000:.0f} ms (< 500)")
+    p.stdin.close(); p.wait(timeout=5)
+    print("ALL PASSED"); sys.exit(0)
+
 m, text, calls = rpc(3, "session/prompt", prompt("please read it", "plan"))
 check(calls == ["fs/read_text_file"] and "I read the file" in text, "plan mode reads via editor, streams text")
+tc = [e for e in events if e["sessionUpdate"] == "tool_call"]
+tu = [e for e in events if e["sessionUpdate"] == "tool_call_update"]
+check([e["status"] for e in tc] == ["pending", "in_progress"] and len(tu) == 1 and tu[0]["status"] == "completed", "tool_call pending -> in_progress -> tool_call_update completed")
+check({e["toolCallId"] for e in tc} == {tu[0]["toolCallId"]} and tc[0]["kind"] == "read" and "read_file" in tc[0]["title"], "tool events share one id; kind is read")
+check("hello" in tu[0]["content"] and "[tool:" not in text and "[result:" not in text, "update carries the result; old text markers are gone")
+us = [e for e in events if e["sessionUpdate"] == "usage"]
+check(len(us) == 2 and all(u["promptTokens"] > 0 and u["completionTokens"] > 0 and u["tokensPerSecond"] >= 0 for u in us), "one usage update per model call")
 
 m, text, calls = rpc(4, "session/prompt", prompt("edit it", "plan"))
 check("write" not in "".join(calls) and "not available" not in text or "Plan mode cannot edit" in text, "plan mode blocks edits")
@@ -132,7 +168,9 @@ check("session/request_permission" in calls and open(target).read() == "hello\nw
 
 m, text, calls = rpc(6, "session/prompt", prompt("edit it", "build"), allow=True)
 check("fs/write_text_file" in calls and open(target).read() == "hello\nthere\n", "approved edit applied (repair handled trailing {})")
+events.clear()
 m, text, calls = rpc(7, "session/prompt", prompt("danger", "build"))
+check([e["status"] for e in events if e["sessionUpdate"] == "tool_call_update"] == ["failed"] and any(e.get("kind") == "execute" for e in events), "refused command reports a failed execute tool call")
 check("terminal/create" not in calls and "Refused" in text, "destructive command refused, never reaches terminal")
 
 m, text, calls = rpc(8, "session/prompt", prompt("unknown command", "build"), allow=False)

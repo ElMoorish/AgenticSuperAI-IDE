@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 fn env_num(key: &str, default: u64) -> u64 {
@@ -21,6 +22,8 @@ pub enum Delta {
     Text(String),
     /// One fragment of a native tool call; fragments with the same `index` belong together.
     Tool { index: usize, id: Option<String>, name: Option<String>, args: Option<String> },
+    /// Server-reported token usage (`usage` object in the stream).
+    Usage { prompt: u64, completion: u64 },
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -31,12 +34,32 @@ pub struct ToolCallOut {
     pub args: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Usage {
+    pub prompt: u64,
+    pub completion: u64,
+}
+
+/// ceil(chars / 4): the token estimate used when the server reports no usage.
+pub fn estimate_tokens(chars: usize) -> u64 {
+    (chars as u64).div_ceil(4)
+}
+
+/// Estimated prompt tokens: total chars of the request messages / 4.
+pub fn estimate_prompt_tokens(messages: &[Value]) -> u64 {
+    let chars: usize = messages.iter().map(|m| m["content"].as_str().map(|s| s.chars().count()).unwrap_or(0)).sum();
+    estimate_tokens(chars)
+}
+
 #[derive(Debug, Default)]
 pub struct Completion {
     pub text: String,
     pub tool_calls: Vec<ToolCallOut>,
     /// Set when we cut the stream ourselves (degenerate output or deadline). The text must not enter history.
     pub aborted: Option<String>,
+    /// Server-reported usage when present, else an estimate (chars/4).
+    pub usage: Option<Usage>,
+    pub tokens_per_second: f64,
 }
 
 /// True when the tail of the output is a tiny alphabet repeated (e.g. endless `\n\n\n`), i.e. the model is stuck.
@@ -68,6 +91,11 @@ pub fn parse_sse_line(line: &str) -> Result<Vec<Delta>, ()> {
     let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(vec![]) };
     let delta = &v["choices"][0]["delta"];
     let mut out = Vec::new();
+    if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
+        if let (Some(p), Some(c)) = (u["prompt_tokens"].as_u64(), u["completion_tokens"].as_u64()) {
+            out.push(Delta::Usage { prompt: p, completion: c });
+        }
+    }
     if let Some(t) = delta["content"].as_str().filter(|s| !s.is_empty()) {
         out.push(Delta::Text(t.to_string()));
     }
@@ -100,7 +128,12 @@ impl Provider {
     }
 
     /// Streams the completion, calling `on_text` per text chunk. Pass `tools` for native tool calling.
-    pub fn chat_stream(&self, messages: &[Value], tools: Option<&[Value]>, mut on_text: impl FnMut(&str)) -> Result<Completion> {
+    /// When `cancel` becomes true the stream is dropped and `aborted` is `Some("cancelled")`.
+    pub fn chat_stream(&self, messages: &[Value], tools: Option<&[Value]>, cancel: &AtomicBool, mut on_text: impl FnMut(&str)) -> Result<Completion> {
+        let started = Instant::now();
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(Completion { aborted: Some("cancelled".into()), ..Default::default() });
+        }
         // max_tokens bounds a runaway generation server-side; the read timeout catches a stalled server;
         // the deadline and degenerate-output check below catch a stream that keeps talking but goes nowhere.
         let max_tokens = env_num("ASA_MAX_TOKENS", 4096);
@@ -120,7 +153,13 @@ impl Provider {
             .context("llama-server not reachable or rejected the request (see config/start-llama-server.ps1)")?;
         let mut done = Completion::default();
         let mut calls: BTreeMap<usize, ToolCallOut> = BTreeMap::new();
+        let mut streamed_chars = 0usize;
+        let mut reported: Option<Usage> = None;
         'stream: for line in BufReader::new(resp.into_reader()).lines() {
+            if cancel.load(Ordering::SeqCst) {
+                done.aborted = Some("cancelled".into());
+                break;
+            }
             let line = match line {
                 Ok(l) => l,
                 Err(e) => {
@@ -131,7 +170,9 @@ impl Provider {
             let Ok(deltas) = parse_sse_line(&line) else { break };
             for d in deltas {
                 match d {
+                    Delta::Usage { prompt, completion } => reported = Some(Usage { prompt, completion }),
                     Delta::Text(t) => {
+                        streamed_chars += t.chars().count();
                         on_text(&t);
                         done.text.push_str(&t);
                         if is_degenerate(&done.text) {
@@ -152,6 +193,7 @@ impl Provider {
                             c.name = n;
                         }
                         if let Some(a) = args {
+                            streamed_chars += a.chars().count();
                             c.args.push_str(&a);
                         }
                     }
@@ -164,6 +206,10 @@ impl Provider {
                 c.id = format!("call_{i}");
             }
         }
+        let usage = reported.unwrap_or(Usage { prompt: estimate_prompt_tokens(messages), completion: estimate_tokens(streamed_chars) });
+        let secs = started.elapsed().as_secs_f64();
+        done.tokens_per_second = if secs > 0.0 { usage.completion as f64 / secs } else { 0.0 };
+        done.usage = Some(usage);
         Ok(done)
     }
 }
@@ -189,6 +235,23 @@ mod tests {
     fn parses_text_delta() {
         let l = r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#;
         assert_eq!(parse_sse_line(l), Ok(vec![Delta::Text("hi".into())]));
+    }
+
+    #[test]
+    fn parses_usage_chunk() {
+        let l = r#"data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}"#;
+        assert_eq!(parse_sse_line(l), Ok(vec![Delta::Usage { prompt: 12, completion: 5 }]));
+        assert_eq!(parse_sse_line(r#"data: {"choices":[{"delta":{"content":"a"}}],"usage":null}"#), Ok(vec![Delta::Text("a".into())]));
+    }
+
+    #[test]
+    fn token_estimates_round_up() {
+        assert_eq!(estimate_tokens(0), 0);
+        assert_eq!(estimate_tokens(1), 1);
+        assert_eq!(estimate_tokens(8), 2);
+        assert_eq!(estimate_tokens(9), 3);
+        let msgs = vec![json!({"role":"user","content":"abcdefgh"}), json!({"role":"assistant","content":null})];
+        assert_eq!(estimate_prompt_tokens(&msgs), 2);
     }
 
     #[test]

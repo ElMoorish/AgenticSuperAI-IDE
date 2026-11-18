@@ -2,13 +2,14 @@
 
 use crate::agent::{tool_allowed, Mode};
 use crate::diff;
+use crate::events;
 use crate::io::Io;
 use crate::loopguard::LoopGuard;
 use crate::provider::{is_bad_request, Provider};
 use crate::repair::{extract_text_tool_call, repair_tool_call};
 use crate::shell::{self, Verdict};
 use serde_json::{json, Value};
-use std::io::{BufRead, Write};
+use std::io::Write;
 
 const MAX_STEPS: usize = 8;
 
@@ -19,11 +20,12 @@ pub struct Session {
     guard: LoopGuard,
     /// Use the XML tool format instead of native tool calls (ASA_TOOL_MODE=xml, or after the server rejected `tools`).
     xml_only: bool,
+    tool_seq: u64,
 }
 
 impl Session {
     pub fn new(id: String, cwd: String) -> Self {
-        Self { id, cwd, history: Vec::new(), guard: LoopGuard::default(), xml_only: std::env::var("ASA_TOOL_MODE").map(|v| v == "xml").unwrap_or(false) }
+        Self { id, cwd, history: Vec::new(), guard: LoopGuard::default(), xml_only: std::env::var("ASA_TOOL_MODE").map(|v| v == "xml").unwrap_or(false), tool_seq: 0 }
     }
 
     fn abs(&self, rel: &str) -> String {
@@ -34,24 +36,32 @@ impl Session {
         }
     }
 
-    fn chunk<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, text: &str) {
+    fn chunk<W: Write>(&self, io: &mut Io<W>, text: &str) {
         io.notify("session/update", json!({"sessionId": self.id, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}));
     }
 
+    fn emit<W: Write>(&self, io: &mut Io<W>, update: Value) {
+        io.notify("session/update", json!({"sessionId": self.id, "update": update}));
+    }
+
     /// Returns the ACP stop reason.
-    pub fn prompt<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, prov: &Provider, mode: Mode, text: &str) -> &'static str {
+    pub fn prompt<W: Write>(&mut self, io: &mut Io<W>, prov: &Provider, mode: Mode, text: &str) -> &'static str {
         self.history.push(json!({"role": "user", "content": text}));
         self.guard = LoopGuard::default(); // repeats only count within one user turn
         let (mut edited, mut nudged) = (false, false);
+        let cancel = io.cancel_flag();
         for _ in 0..MAX_STEPS {
+            if io.cancelled() {
+                return "cancelled";
+            }
             // Native tool calling is the default; the XML format is the fallback for models/servers without it.
             let native = !self.xml_only;
             let mut messages = vec![json!({"role": "system", "content": mode.system_prompt(native)})];
             messages.extend(self.history.iter().cloned());
             let schemas = mode.tool_schemas();
             let id = self.id.clone();
-            let stream = |io: &mut Io<R, W>, msgs: &[Value], tools: Option<&[Value]>| {
-                prov.chat_stream(msgs, tools, |d| {
+            let stream = |io: &mut Io<W>, msgs: &[Value], tools: Option<&[Value]>| {
+                prov.chat_stream(msgs, tools, &cancel, |d| {
                     io.notify("session/update", json!({"sessionId": id, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": d}}}));
                 })
             };
@@ -65,12 +75,19 @@ impl Session {
             }
             let reply = match reply {
                 Ok(r) => r,
+                Err(_) if io.cancelled() => return "cancelled",
                 Err(e) => {
                     self.chunk(io, &format!("[no model] {e:#}"));
                     return "end_turn";
                 }
             };
 
+            if let Some(u) = reply.usage {
+                self.emit(io, events::usage(u.prompt, u.completion, reply.tokens_per_second));
+            }
+            if reply.aborted.as_deref() == Some("cancelled") || io.cancelled() {
+                return "cancelled"; // partial output never enters history
+            }
             if let Some(why) = &reply.aborted {
                 // Garbage must not enter history: it would poison every later request.
                 self.chunk(io, &format!("\n[generation stopped: {why}. Try again or switch model.]\n"));
@@ -82,12 +99,19 @@ impl Session {
                 let calls: Vec<Value> = reply.tool_calls.iter().map(|c| json!({"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.args}})).collect();
                 self.history.push(json!({"role": "assistant", "content": reply.text, "tool_calls": calls}));
                 for c in &reply.tool_calls {
-                    let result = match repair_tool_call(if c.args.trim().is_empty() { "{}" } else { &c.args }) {
-                        Ok(args) => self.execute(io, mode, &c.name, &args),
-                        Err(e) => format!("error: arguments for '{}' are not valid JSON ({e})", c.name),
+                    let result = if io.cancelled() {
+                        "error: cancelled by the user".to_string() // keep history valid: every call gets a tool message
+                    } else {
+                        match repair_tool_call(if c.args.trim().is_empty() { "{}" } else { &c.args }) {
+                            Ok(args) => self.execute(io, mode, &c.name, &args),
+                            Err(e) => format!("error: arguments for '{}' are not valid JSON ({e})", c.name),
+                        }
                     };
                     edited |= result.starts_with("applied");
                     self.history.push(json!({"role": "tool", "tool_call_id": c.id, "content": result}));
+                }
+                if io.cancelled() {
+                    return "cancelled";
                 }
                 continue;
             }
@@ -121,21 +145,28 @@ impl Session {
     }
 
     /// Gate, loop-check and run one tool call; always returns text for the model.
-    fn execute<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, mode: Mode, name: &str, args: &Value) -> String {
-        let result = if !tool_allowed(mode, name) {
-            format!("error: tool '{name}' is not available in {mode:?} mode. Available tools: {}", mode.tools().join(", "))
+    fn execute<W: Write>(&mut self, io: &mut Io<W>, mode: Mode, name: &str, args: &Value) -> String {
+        self.tool_seq += 1;
+        let tid = format!("tc{}", self.tool_seq);
+        let detail = args["path"].as_str().or_else(|| args["command"].as_str()).unwrap_or("");
+        let title: String = format!("{name} {detail}").trim().chars().take(120).collect();
+        self.emit(io, events::tool_call_kind(&tid, &title, events::kind_for(name), "pending"));
+        let (result, ok) = if !tool_allowed(mode, name) {
+            (format!("error: tool '{name}' is not available in {mode:?} mode. Available tools: {}", mode.tools().join(", ")), false)
         } else if self.guard.should_block(name, args) {
-            "blocked: identical tool call repeated. Reflect on the previous result or ask the user.".to_string()
+            ("blocked: identical tool call repeated. Reflect on the previous result or ask the user.".to_string(), false)
         } else {
-            self.chunk(io, &format!("\n[tool: {name}]\n"));
-            self.run_tool(io, name, args).unwrap_or_else(|e| format!("error: {e}"))
+            self.emit(io, events::tool_call_kind(&tid, &title, events::kind_for(name), "in_progress"));
+            match self.run_tool(io, name, args) {
+                Ok(r) => (r, true),
+                Err(e) => (format!("error: {e}"), false),
+            }
         };
-        let preview: String = result.lines().next().unwrap_or("").chars().take(160).collect();
-        self.chunk(io, &format!("\n[result: {preview}]\n"));
+        self.emit(io, events::tool_update(&tid, if ok { "completed" } else { "failed" }, &result));
         result
     }
 
-    fn ask<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, title: &str, detail: &str, allow_label: &str) -> Result<bool, String> {
+    fn ask<W: Write>(&self, io: &mut Io<W>, title: &str, detail: &str, allow_label: &str) -> Result<bool, String> {
         let perm = io.call("session/request_permission", json!({
             "sessionId": self.id,
             "toolCall": {"title": title, "content": detail},
@@ -148,7 +179,7 @@ impl Session {
     }
 
     /// Run one command in an editor-owned terminal; returns exit code + truncated output.
-    fn exec<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, cmdline: &str) -> Result<String, String> {
+    fn exec<W: Write>(&self, io: &mut Io<W>, cmdline: &str) -> Result<String, String> {
         let parts = shell::split_args(cmdline);
         let (prog, rest) = parts.split_first().ok_or("empty command")?;
         let t = io.call("terminal/create", json!({
@@ -164,7 +195,7 @@ impl Session {
         Ok(format!("exit code: {code}\n{text}"))
     }
 
-    fn run_shell<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, cmdline: &str) -> Result<String, String> {
+    fn run_shell<W: Write>(&mut self, io: &mut Io<W>, cmdline: &str) -> Result<String, String> {
         match shell::classify(cmdline) {
             Verdict::Deny(why) => Err(format!("command refused: {why}")),
             Verdict::Ask if !self.ask(io, &format!("Run: {cmdline}"), cmdline, "Allow command")? => {
@@ -175,7 +206,7 @@ impl Session {
     }
 
     /// Probe for a project file through the editor, then run the matching check.
-    fn compiler_check<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, args: &Value) -> Result<String, String> {
+    fn compiler_check<W: Write>(&mut self, io: &mut Io<W>, args: &Value) -> Result<String, String> {
         if let Some(c) = args["command"].as_str() {
             return self.run_shell(io, c);
         }
@@ -185,7 +216,7 @@ impl Session {
         }
     }
 
-    fn detect_check<R: BufRead, W: Write>(&self, io: &mut Io<R, W>) -> Option<&'static str> {
+    fn detect_check<W: Write>(&self, io: &mut Io<W>) -> Option<&'static str> {
         const PROBES: &[(&str, &str)] = &[
             ("Cargo.toml", "cargo check --message-format short"),
             ("tsconfig.json", "npx tsc --noEmit"),
@@ -197,7 +228,7 @@ impl Session {
 
     /// What the model should know right after an edit lands: did the editor reformat the file
     /// on save (so its next SEARCH block must match the new text), and does the project still compile?
-    fn post_edit_report<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, path: &str, abs: &str, written: &str) -> String {
+    fn post_edit_report<W: Write>(&self, io: &mut Io<W>, path: &str, abs: &str, written: &str) -> String {
         let mut report = String::new();
         let norm = |s: &str| s.replace("\r\n", "\n");
         if let Ok(r) = io.call("fs/read_text_file", json!({"sessionId": self.id, "path": abs})) {
@@ -218,7 +249,7 @@ impl Session {
         report
     }
 
-    fn run_tool<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, name: &str, args: &Value) -> Result<String, String> {
+    fn run_tool<W: Write>(&mut self, io: &mut Io<W>, name: &str, args: &Value) -> Result<String, String> {
         match name {
             "run_shell_scoped" => self.run_shell(io, args["command"].as_str().ok_or("missing 'command'")?),
             "run_compiler_check" => self.compiler_check(io, args),
@@ -226,7 +257,7 @@ impl Session {
         }
     }
 
-    fn run_file_tool<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, name: &str, args: &Value) -> Result<String, String> {
+    fn run_file_tool<W: Write>(&mut self, io: &mut Io<W>, name: &str, args: &Value) -> Result<String, String> {
         let path = args["path"].as_str().ok_or("missing 'path'")?;
         let abs = self.abs(path);
         match name {

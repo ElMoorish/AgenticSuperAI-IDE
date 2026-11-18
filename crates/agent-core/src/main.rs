@@ -6,6 +6,7 @@
 mod agent;
 mod budget;
 mod diff;
+mod events;
 mod io;
 mod loopguard;
 mod provider;
@@ -16,11 +17,14 @@ mod shell;
 use agent::Mode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 fn main() {
     let prov = provider::Provider::from_env();
-    let stdin = std::io::stdin();
-    let mut io = io::Io::new(stdin.lock(), std::io::stdout().lock());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let rx = io::spawn_reader(std::io::BufReader::new(std::io::stdin()), cancel.clone());
+    let mut io = io::Io::new(rx, std::io::stdout().lock(), cancel);
     let mut sessions: HashMap<String, session::Session> = HashMap::new();
     let mut counter = 0u32;
 
@@ -32,6 +36,9 @@ fn main() {
                 continue;
             }
         };
+        if req.get("method").is_none() {
+            continue; // a late reply to a call abandoned by cancel
+        }
         let id = req.get("id").cloned();
         let params = &req["params"];
         let res: Result<Value, (i32, String)> = match req["method"].as_str().unwrap_or("") {
