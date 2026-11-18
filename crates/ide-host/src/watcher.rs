@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const QUIET: Duration = Duration::from_millis(100);
-const BURST_QUIET: Duration = Duration::from_millis(600);
+const BURST_QUIET: Duration = Duration::from_millis(1500);
 /// Upper bound on how long a continuous event stream may delay a flush.
 const MAX_WINDOW: Duration = Duration::from_secs(5);
 const MAX_PATHS: usize = 5000;
@@ -120,7 +120,7 @@ pub fn map_event(root: &Path, ignore: &[String], ev: &Event) -> Vec<(String, FsK
                     out.push((r, FsKind::Created));
                 }
             }
-            // Ambiguous: decide by whether the path still exists.
+            // Ambiguous (note: one exists() stat on the callback thread, accepted): decide by whether the path still exists.
             _ => {
                 for p in &ev.paths {
                     if let Some(r) = rel(p) {
@@ -137,6 +137,9 @@ pub fn map_event(root: &Path, ignore: &[String], ev: &Event) -> Vec<(String, FsK
     out
 }
 
+/// Dedupe edge cases: C+M stays Created; C+R cancels out entirely (the UI
+/// never saw the file); R+C or R+M becomes Modified (atomic-replace pattern:
+/// delete then recreate), so a replaced file is refreshed rather than dropped.
 fn merge(prev: FsKind, new: FsKind) -> Option<FsKind> {
     use FsKind::*;
     match (prev, new) {
@@ -183,9 +186,9 @@ impl Window {
     }
 
     fn into_batch(self) -> FsBatch {
+        // add() never lets the map exceed MAX_PATHS, so no truncation is needed.
         let mut v: Vec<_> = self.map.into_iter().collect();
         v.sort_by_key(|(_, (o, _))| *o);
-        v.truncate(MAX_PATHS);
         FsBatch {
             changes: v.into_iter().map(|(path, (_, kind))| FsChange { path, kind }).collect(),
             overflow: self.overflow,

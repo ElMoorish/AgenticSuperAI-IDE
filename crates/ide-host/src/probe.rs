@@ -95,14 +95,23 @@ fn probe_with_timeout(base: &str, timeout: Duration) -> ProbeResult {
             return fail(msg);
         }
     };
-    let mut body = String::new();
-    if resp.into_reader().take(MAX_BODY).read_to_string(&mut body).is_err() {
-        return fail("could not read response (timed out or not text)");
+    if !(200..300).contains(&resp.status()) {
+        return fail(format!("server answered HTTP {}", resp.status()));
     }
-    let models = serde_json::from_str::<serde_json::Value>(&body)
-        .map(|v| parse_models(&v))
-        .unwrap_or_default();
-    ProbeResult { ok: true, models, error: None }
+    let mut body = Vec::new();
+    if resp.into_reader().take(MAX_BODY + 1).read_to_end(&mut body).is_err() {
+        return fail("could not read response (timed out or connection lost)");
+    }
+    if body.len() as u64 > MAX_BODY {
+        return fail("response too large for a models endpoint");
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return fail("not an OpenAI-style models endpoint");
+    };
+    if !v["data"].is_array() && !v["models"].is_array() {
+        return fail("not an OpenAI-style models endpoint");
+    }
+    ProbeResult { ok: true, models: parse_models(&v), error: None }
 }
 
 /// Probe the usual local servers in parallel (500 ms each); returns the ones

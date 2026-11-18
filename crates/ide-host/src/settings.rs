@@ -33,8 +33,13 @@ impl Default for Settings {
 }
 
 fn de_font_size<'de, D: Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
-    let v = i64::deserialize(d)?;
-    Ok(v.clamp(8, 32) as u8)
+    // Any JSON number is accepted (floats round half away from zero, so
+    // 13.5 -> 14, then clamp 8..=32); non-numeric values fall back to 13.
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v.as_f64() {
+        Some(f) if f.is_finite() => f.round().clamp(8.0, 32.0) as u8,
+        _ => 13,
+    })
 }
 
 impl Settings {
@@ -71,7 +76,9 @@ impl Settings {
     /// Atomic save: write a temp file in `dir`, fsync, rename over the target.
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!("{FILE}.{}.tmp", std::process::id()));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!("{FILE}.{}.{n}.tmp", std::process::id()));
         let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
         let res = (|| {
             let mut f = std::fs::File::create(&tmp)?;

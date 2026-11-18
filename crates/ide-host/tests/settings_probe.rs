@@ -183,3 +183,107 @@ fn gpu_parse_handles_csv_line() {
     assert_eq!(parse_gpu_csv(""), None);
     assert_eq!(parse_gpu_csv("[N/A], 8188"), None);
 }
+
+fn serve_raw(resp: &'static str) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let Ok(mut s) = s else { continue };
+            let mut buf = [0u8; 2048];
+            let mut got = Vec::new();
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = s.write_all(resp.as_bytes());
+        }
+    });
+    port
+}
+
+const R302: &str = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+const RHTML: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<html>hi</html";
+const RNODATA: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+
+#[test]
+fn probe_rejects_redirect_html_and_wrong_json() {
+    for (name, raw) in [("302", R302), ("html", RHTML), ("nodata", RNODATA)] {
+        let p = serve_raw(raw);
+        let r = probe_endpoint(&format!("http://127.0.0.1:{p}"));
+        assert!(!r.ok, "{name} must not be ok");
+        let e = r.error.expect(name);
+        assert!(!e.contains("127.0.0.1:9"), "{e}");
+    }
+}
+
+#[test]
+fn probe_rejects_over_cap_body() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let mut s = s;
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf);
+            let n = 5 * 1024 * 1024;
+            let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {n}\r\nConnection: close\r\n\r\n{{\"data\":[").as_bytes());
+            let chunk = vec![b' '; 64 * 1024];
+            for _ in 0..(n / chunk.len()) {
+                if s.write_all(&chunk).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let r = probe_endpoint(&format!("http://127.0.0.1:{port}"));
+    assert!(!r.ok);
+}
+
+#[test]
+fn detect_servers_excludes_non_model_servers() {
+    let good = serve(r#"{"data":[]}"#);
+    let (a, b, c, d) = (serve_raw(R302), serve_raw(RHTML), serve_raw(RNODATA), format!("http://127.0.0.1:{good}"));
+    let (a, b, c) = (format!("http://127.0.0.1:{a}"), format!("http://127.0.0.1:{b}"), format!("http://127.0.0.1:{c}"));
+    let found = detect_servers_at(&[("a", &a), ("b", &b), ("c", &c), ("good", &d)]);
+    assert_eq!(found, vec![DetectedServer { name: "good".into(), url: d }]);
+}
+
+#[test]
+fn settings_concurrent_saves_do_not_collide() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().to_path_buf();
+    let hs: Vec<_> = (0..4)
+        .map(|t| {
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                for i in 0..25 {
+                    let mut s = Settings::default();
+                    s.model = format!("m{t}-{i}");
+                    s.save(&dir).unwrap();
+                }
+            })
+        })
+        .collect();
+    hs.into_iter().for_each(|h| h.join().unwrap());
+    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, vec!["settings.json".to_string()]);
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("settings.json")).unwrap()).unwrap();
+    assert!(v["model"].as_str().unwrap().starts_with('m'));
+}
+
+#[test]
+fn settings_odd_font_size_is_not_corruption() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("settings.json");
+    // floats round (half away from zero) then clamp: 13.5 -> 14
+    std::fs::write(&f, r#"{"font_size":13.5,"model":"keep"}"#).unwrap();
+    let s = Settings::load(d.path());
+    assert_eq!((s.font_size, s.model.as_str()), (14, "keep"));
+    std::fs::write(&f, r#"{"font_size":"big","model":"keep"}"#).unwrap();
+    let s = Settings::load(d.path());
+    assert_eq!((s.font_size, s.model.as_str()), (13, "keep"));
+    assert!(!d.path().join("settings.json.bad").exists());
+}
