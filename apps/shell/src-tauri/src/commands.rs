@@ -1,0 +1,142 @@
+//! Tauri command adapters. Each one is a thin wrapper over an `AppState` method; all
+//! validation (workspace-confined paths, stamps, settings) lives in `state.rs`.
+//! Blocking work runs on the blocking pool so the async runtime and UI stay responsive.
+//!
+//! JS argument names are camelCase (`onEvent`, `onOutput`); errors arrive as `{code, message}`.
+
+use crate::state::{
+    AppError, AppState, DetectedDto, DirEntryDto, ProbeDto, ReadFileResult, StampDto, UiEvent, WorkspaceInfo,
+};
+use ide_host::settings::Settings;
+use std::sync::Arc;
+use tauri::ipc::Channel;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
+
+type S<'a> = State<'a, Arc<AppState>>;
+
+async fn blocking<T, F>(state: &S<'_>, f: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<AppState>) -> Result<T, AppError> + Send + 'static,
+{
+    let st = state.inner().clone();
+    tokio::task::spawn_blocking(move || f(st))
+        .await
+        .map_err(|e| AppError::new("io", format!("task failed: {e}")))?
+}
+
+fn channel_sink<T: serde::Serialize + Clone + Send + Sync + 'static>(
+    ch: Channel<T>,
+) -> impl Fn(&T) -> bool + Send + Sync + 'static {
+    move |ev| ch.send(ev.clone()).is_ok()
+}
+
+/// Native folder picker (runs in Rust so the webview needs no dialog permission).
+/// Returns `null` when the user cancels.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, AppError> {
+    tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| AppError::new("io", e.to_string()))
+}
+
+#[tauri::command]
+pub async fn open_folder(state: S<'_>, path: String) -> Result<WorkspaceInfo, AppError> {
+    state.open_folder(&path).await
+}
+
+#[tauri::command]
+pub async fn list_dir(state: S<'_>, rel: String) -> Result<Vec<DirEntryDto>, AppError> {
+    blocking(&state, move |st| st.list_dir(&rel)).await
+}
+
+#[tauri::command]
+pub async fn read_file(state: S<'_>, rel: String) -> Result<ReadFileResult, AppError> {
+    blocking(&state, move |st| st.read_file(&rel)).await
+}
+
+#[tauri::command]
+pub async fn save_file(state: S<'_>, rel: String, text: String, stamp: StampDto) -> Result<StampDto, AppError> {
+    blocking(&state, move |st| st.save_file(&rel, &text, &stamp)).await
+}
+
+/// Register the webview listener for all UI events without starting a turn.
+#[tauri::command]
+pub fn subscribe_events(state: S<'_>, on_event: Channel<UiEvent>) {
+    state.set_sink(Arc::new(channel_sink(on_event)));
+}
+
+/// Run a turn. `on_event` replaces the current listener (same stream as `subscribe_events`).
+/// Resolves after the turn; `TurnEnd` is delivered on the channel just before it resolves.
+#[tauri::command]
+pub async fn agent_prompt(
+    state: S<'_>,
+    mode: String,
+    text: String,
+    on_event: Channel<UiEvent>,
+) -> Result<(), AppError> {
+    state.set_sink(Arc::new(channel_sink(on_event)));
+    state.agent_prompt(&mode, &text).await
+}
+
+#[tauri::command]
+pub fn agent_cancel(state: S<'_>) {
+    state.agent_cancel();
+}
+
+#[tauri::command]
+pub async fn resolve_approval(state: S<'_>, id: u64, accept: bool) -> Result<(), AppError> {
+    state.resolve_approval(id, accept).await
+}
+
+#[tauri::command]
+pub async fn probe_endpoint(state: S<'_>, url: String) -> Result<ProbeDto, AppError> {
+    state.probe_endpoint(&url).await
+}
+
+#[tauri::command]
+pub async fn detect_servers(state: S<'_>) -> Result<Vec<DetectedDto>, AppError> {
+    state.detect_servers().await
+}
+
+#[tauri::command]
+pub fn get_settings(state: S<'_>) -> Settings {
+    state.get_settings()
+}
+
+#[tauri::command]
+pub async fn set_settings(state: S<'_>, settings: Settings) -> Result<Settings, AppError> {
+    state.set_settings(settings).await
+}
+
+#[tauri::command]
+pub async fn start_user_terminal(
+    state: S<'_>,
+    rows: u16,
+    cols: u16,
+    on_output: Channel<Vec<u8>>,
+) -> Result<u64, AppError> {
+    state.start_user_terminal(rows, cols, Box::new(move |b: Vec<u8>| on_output.send(b).is_ok()))
+}
+
+#[tauri::command]
+pub async fn terminal_write(state: S<'_>, id: u64, data: Vec<u8>) -> Result<(), AppError> {
+    blocking(&state, move |st| st.terminal_write(id, &data)).await
+}
+
+#[tauri::command]
+pub async fn terminal_resize(state: S<'_>, id: u64, rows: u16, cols: u16) -> Result<(), AppError> {
+    blocking(&state, move |st| st.terminal_resize(id, rows, cols)).await
+}
+
+#[tauri::command]
+pub fn close_terminal(state: S<'_>, id: u64) {
+    state.close_terminal(id);
+}
