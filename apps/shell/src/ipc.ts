@@ -120,7 +120,8 @@ export const openFolder = (path: string) => call<WorkspaceInfo>("open_folder", {
 export const listDir = (rel: string) => call<DirEntry[]>("list_dir", { rel });
 export const readFile = (rel: string) => call<ReadFileResult>("read_file", { rel });
 /** Rejects with code "conflict" when the stamp is stale. */
-export const saveFile = (rel: string, text: string, stamp: Stamp) => call<Stamp>("save_file", { rel, text, stamp });
+/** `stamp: null` = create-only (recreate a file deleted from disk; `conflict` if it exists). */
+export const saveFile = (rel: string, text: string, stamp: Stamp | null) => call<Stamp>("save_file", { rel, text, stamp });
 
 let subscribeGeneration = 0;
 /**

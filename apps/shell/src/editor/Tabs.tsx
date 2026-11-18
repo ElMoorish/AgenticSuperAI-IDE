@@ -45,9 +45,11 @@ export function Tabs({ order, buffers, active, onActivate, onClose, onSave }: {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && !e.altKey && e.key.toLowerCase() === "w") {
       e.preventDefault();
+      e.stopPropagation(); // the editor wrapper also handles these keys: don't act twice
       onClose(rel);
     } else if (mod && !e.altKey && e.key.toLowerCase() === "s") {
       e.preventDefault();
+      e.stopPropagation();
       onSave(rel);
     } else if (e.key === "ArrowRight") {
       e.preventDefault();

@@ -24,6 +24,7 @@ export function EditorArea() {
   const reloadVs = useRef<Map<string, unknown>>(new Map());
   const [closing, setClosing] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmReload, setConfirmReload] = useState<string | null>(null);
 
   const active = state.active;
   const buf: Buffer | undefined = active ? state.buffers[active] : undefined;
@@ -67,8 +68,11 @@ export function EditorArea() {
     if (!wantsEditor || editor || !hostRef.current) return;
     let cancelled = false;
     const el = hostRef.current;
-    void import("./monacoModels").then((mod) => {
-      if (cancelled) return;
+    void import("./monacoModels").catch((e: unknown) => {
+      if (!cancelled) setNotice(`The editor could not be loaded: ${e instanceof Error ? e.message : String(e)}. Reopen the file to retry.`);
+      return null;
+    }).then((mod) => {
+      if (cancelled || !mod) return;
       modRef.current = mod;
       const s = useStore.getState();
       const ed = mod.createEditor(el, { theme: monacoThemeName(s.theme), fontSize: s.settings.value?.font_size ?? 13 });
@@ -107,6 +111,11 @@ export function EditorArea() {
     models.hooks.willReload = (rel) => {
       if (shownRef.current?.rel === rel) reloadVs.current.set(rel, editor.saveViewState());
     };
+    models.hooks.willClose = (rel) => {
+      // the model is about to be disposed: keep where the user was for a later reopen
+      const sh = shownRef.current;
+      if (sh && sh.rel === rel && editor.getModel() === sh.model.raw) models.setViewState(rel, editor.saveViewState());
+    };
     models.hooks.didReload = (rel) => {
       const vs = reloadVs.current.get(rel);
       reloadVs.current.delete(rel);
@@ -134,7 +143,9 @@ export function EditorArea() {
       editor.updateOptions({ readOnly: buf?.readOnly ?? false });
       const vs = models.getViewState(active);
       if (vs) editor.restoreViewState(vs as ViewState);
-      editor.focus();
+      // Don't steal focus from the agent composer / terminal when a file opens in the background.
+      const ae = document.activeElement;
+      if (!ae || ae === document.body || hostRef.current?.contains(ae) || (ae as HTMLElement).closest?.(".ed")) editor.focus();
       shownRef.current = { rel: active, model: next };
     } else {
       editor.setModel(null);
@@ -171,7 +182,7 @@ export function EditorArea() {
       {buf && buf.status === "ready" && buf.conflict === "disk" && (
         <div className="banner warn" role="alert">
           <span><b>{baseName(buf.rel)}</b> changed on disk. Your unsaved edits were kept.</span>
-          <button type="button" onClick={() => void models.reloadFromDisk(buf.rel)}>Reload from disk</button>
+          <button type="button" onClick={() => setConfirmReload(buf.rel)}>Reload from disk</button>
           <button type="button" onClick={() => void models.overwrite(buf.rel).catch((e: Error) => setNotice(String(e?.message ?? e)))}>Overwrite</button>
           <button type="button" onClick={() => models.keepMine(buf.rel)}>Keep mine</button>
         </div>
@@ -179,6 +190,12 @@ export function EditorArea() {
       {buf && buf.status === "ready" && buf.deleted && (
         <div className="banner warn" role="status">
           <span><b>{baseName(buf.rel)}</b> was deleted from disk. Your text is kept in the editor.</span>
+          {!buf.readOnly && <button type="button" onClick={() => void saveRel(buf.rel)}>Recreate file</button>}
+        </div>
+      )}
+      {buf && buf.status === "ready" && buf.mixedEol && !buf.readOnly && (
+        <div className="banner warn" role="status">
+          <span><b>{baseName(buf.rel)}</b> mixes LF and CRLF line endings. Saving after an edit will make them all consistent.</span>
         </div>
       )}
       {notice && (
@@ -193,6 +210,11 @@ export function EditorArea() {
           <div className="empty">
             <b>No file open</b>
             <span>Pick a file from the explorer, or ask the agent to start a task.</span>
+          </div>
+        )}
+        {buf?.status === "loading" && (
+          <div className="empty" role="status" aria-live="polite">
+            <b>Opening {baseName(buf.rel)}…</b>
           </div>
         )}
         {buf?.status === "binary" && (
@@ -222,6 +244,21 @@ export function EditorArea() {
           </div>
         )}
       </div>
+      {confirmReload && state.buffers[confirmReload] && (
+        <ConfirmDialog
+          title={`Reload ${baseName(confirmReload)} from disk?`}
+          message="Your unsaved edits to this file will be discarded."
+          actions={[
+            { label: "Cancel", value: "cancel", primary: true },
+            { label: "Discard my edits and reload", value: "reload" },
+          ]}
+          onChoose={(v) => {
+            const rel = confirmReload;
+            setConfirmReload(null);
+            if (v === "reload") void models.reloadFromDisk(rel);
+          }}
+        />
+      )}
       {closing && state.buffers[closing] && (
         <ConfirmDialog
           title={`Save changes to ${baseName(closing)}?`}
@@ -236,7 +273,7 @@ export function EditorArea() {
             setClosing(null);
             if (v === "discard") models.closeFile(rel);
             else if (v === "save") {
-              void models.saveFile(rel).then((r) => { if (r === "saved") models.closeFile(rel); }).catch((e) => setNotice(`Could not save ${baseName(rel)}: ${e instanceof Error ? e.message : String(e)}`));
+              void models.saveFile(rel).then((r) => { if (r === "saved" && !models.getBufferInfo(rel)?.dirty) models.closeFile(rel); }).catch((e) => setNotice(`Could not save ${baseName(rel)}: ${e instanceof Error ? e.message : String(e)}`));
             }
           }}
         />

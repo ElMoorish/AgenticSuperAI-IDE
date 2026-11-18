@@ -1184,11 +1184,15 @@ impl AppState {
         Ok(ReadFileResult { text, stamp: (&stamp).into() })
     }
 
-    pub fn save_file(&self, rel: &str, text: &str, stamp: &StampDto) -> Result<StampDto, AppError> {
+    /// `stamp: None` means "create this file; fail with `conflict` if it exists" (recreating a
+    /// file that was deleted from disk while its tab was open).
+    pub fn save_file(&self, rel: &str, text: &str, stamp: Option<&StampDto>) -> Result<StampDto, AppError> {
         let ws = self.workspace()?;
         ws.resolve(rel)?; // reject escapes before anything else (incl. a bad stamp)
-        let expected = stamp.to_stamp()?;
-        let new = write_atomic(&ws, rel, text, Some(&expected))?;
+        let new = match stamp {
+            Some(s) => write_atomic(&ws, rel, text, Some(&s.to_stamp()?))?,
+            None => write_atomic_create_new(&ws, rel, text)?,
+        };
         Ok((&new).into())
     }
 
@@ -1462,13 +1466,13 @@ mod tests {
         assert_eq!(st.list_dir("").unwrap_err().code, "no_workspace");
         assert_eq!(st.read_file("a").unwrap_err().code, "no_workspace");
         let dummy = StampDto { mtime_ms: 0, hash: "0".into() };
-        assert_eq!(st.save_file("a", "x", &dummy).unwrap_err().code, "no_workspace");
+        assert_eq!(st.save_file("a", "x", Some(&dummy)).unwrap_err().code, "no_workspace");
         st.open_folder(ws.to_str().unwrap()).await.unwrap();
         let outside = dir.path().join("secret.txt").to_string_lossy().to_string();
         for bad in ["../x", r"..\x","../secret.txt", "C:x", "D:secret.txt", "/secret", outside.as_str()] {
             assert_eq!(st.list_dir(bad).unwrap_err().code, "escapes", "list {bad}");
             assert_eq!(st.read_file(bad).unwrap_err().code, "escapes", "read {bad}");
-            assert_eq!(st.save_file(bad, "x", &dummy).unwrap_err().code, "escapes", "save {bad}");
+            assert_eq!(st.save_file(bad, "x", Some(&dummy)).unwrap_err().code, "escapes", "save {bad}");
         }
         assert!(std::fs::read_to_string(dir.path().join("secret.txt")).unwrap() == "s");
         assert_eq!(st.read_file("missing.txt").unwrap_err().code, "not_found");
@@ -1482,7 +1486,7 @@ mod tests {
         st.open_folder(dir.path().to_str().unwrap()).await.unwrap();
         let r = st.read_file("a.txt").unwrap();
         std::fs::write(dir.path().join("a.txt"), "changed elsewhere").unwrap();
-        let e = st.save_file("a.txt", "mine", &r.stamp).unwrap_err();
+        let e = st.save_file("a.txt", "mine", Some(&r.stamp)).unwrap_err();
         assert_eq!(e.code, "conflict");
         assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "changed elsewhere");
     }
@@ -1626,13 +1630,18 @@ mod tests {
         st.open_folder(dir.path().to_str().unwrap()).await.unwrap();
         let r = st.read_file("a.txt").unwrap();
         assert_eq!(r.text, "one\r\ntwo\r\n");
-        let s2 = st.save_file("a.txt", "one\r\nTWO\r\n", &r.stamp).unwrap();
+        let s2 = st.save_file("a.txt", "one\r\nTWO\r\n", Some(&r.stamp)).unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"one\r\nTWO\r\n");
         assert_ne!(s2.hash, r.stamp.hash);
         // the returned stamp is accepted for the next save
-        st.save_file("a.txt", "three", &s2).unwrap();
+        st.save_file("a.txt", "three", Some(&s2)).unwrap();
         let bad = StampDto { mtime_ms: 0, hash: "zz".into() };
-        assert_eq!(st.save_file("a.txt", "x", &bad).unwrap_err().code, "bad_request");
+        assert_eq!(st.save_file("a.txt", "x", Some(&bad)).unwrap_err().code, "bad_request");
+        // stamp None = create-only: refused while the file exists, allowed once it is gone
+        assert_eq!(st.save_file("a.txt", "x", None).unwrap_err().code, "conflict");
+        std::fs::remove_file(dir.path().join("a.txt")).unwrap();
+        st.save_file("a.txt", "again", None).unwrap();
+        assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"again");
     }
 
     #[test]

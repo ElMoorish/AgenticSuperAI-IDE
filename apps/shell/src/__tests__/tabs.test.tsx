@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 const b = (rel: string, over: Partial<Buffer> = {}): Buffer => ({
   rel, status: "ready", dirty: false, stamp: null, viewState: undefined, readOnly: false, language: "plaintext",
-  conflict: null, deleted: false, canOpenAnyway: false, ...over,
+  conflict: null, deleted: false, canOpenAnyway: false, mixedEol: false, ...over,
 });
 
 function setup(over: Partial<Record<string, Partial<Buffer>>> = {}) {

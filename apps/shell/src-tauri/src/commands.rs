@@ -63,8 +63,8 @@ pub async fn read_file(state: S<'_>, rel: String) -> Result<ReadFileResult, AppE
 }
 
 #[tauri::command]
-pub async fn save_file(state: S<'_>, rel: String, text: String, stamp: StampDto) -> Result<StampDto, AppError> {
-    blocking(&state, move |st| st.save_file(&rel, &text, &stamp)).await
+pub async fn save_file(state: S<'_>, rel: String, text: String, stamp: Option<StampDto>) -> Result<StampDto, AppError> {
+    blocking(&state, move |st| st.save_file(&rel, &text, stamp.as_ref())).await
 }
 
 /// Register the webview listener for all UI events without starting a turn.

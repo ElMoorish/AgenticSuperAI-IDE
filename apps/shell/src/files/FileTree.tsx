@@ -348,8 +348,8 @@ export function FileTree() {
           title="Discard unsaved changes?"
           message="Some open files have unsaved changes. Opening another folder will discard them."
           actions={[
-            { label: "Discard and open", value: "open", primary: true },
-            { label: "Cancel", value: "cancel" },
+            { label: "Cancel", value: "cancel", primary: true }, // safe default focus
+            { label: "Discard and open", value: "open" },
           ]}
           onChoose={(v) => {
             const p = confirmPath;
