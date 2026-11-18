@@ -2,6 +2,9 @@
 name = "ide-host"
 version = "0.1.0"
 edition.workspace = true
+# 1.77.2 has the std fix for batch-file (.cmd/.bat) argument escaping we rely on;
+# 1.79 adds str::utf8_chunks used by terminals.rs.
+rust-version = "1.79"
 license.workspace = true
 
 [[bin]]

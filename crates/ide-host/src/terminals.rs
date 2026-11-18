@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
@@ -29,6 +29,13 @@ const MAX_CHUNK: usize = 32 * 1024;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 /// After this many emitted bytes per terminal, `Output` events stop.
 const EMISSION_CAP: usize = 1024 * 1024;
+
+/// Maximum agent terminals that may be running at once.
+pub const MAX_LIVE_TERMINALS: usize = 16;
+/// Maximum agent terminals kept (running + exited); the oldest exited are evicted.
+pub const MAX_RETAINED_TERMINALS: usize = 32;
+/// Capacity of the channel a `UserPty` sends events into.
+pub const PTY_CHANNEL_CAPACITY: usize = 64;
 
 /// Terminal handle. A plain `u64` alias, unique within an `AgentTerminals`.
 pub type TerminalId = u64;
@@ -52,6 +59,10 @@ pub enum TerminalError {
     Unknown,
     Io(String),
     Pty(String),
+    /// Too many live agent terminals (see `MAX_LIVE_TERMINALS`).
+    TooMany,
+    /// rows or cols was zero.
+    InvalidSize,
 }
 
 impl std::fmt::Display for TerminalError {
@@ -61,6 +72,11 @@ impl std::fmt::Display for TerminalError {
             TerminalError::Unknown => write!(f, "unknown terminal"),
             TerminalError::Io(e) => write!(f, "io error: {e}"),
             TerminalError::Pty(e) => write!(f, "pty error: {e}"),
+            TerminalError::TooMany => write!(
+                f,
+                "too many running terminals (limit {MAX_LIVE_TERMINALS}); release one first"
+            ),
+            TerminalError::InvalidSize => write!(f, "terminal rows and cols must be non-zero"),
         }
     }
 }
@@ -115,36 +131,96 @@ impl RingBuffer {
 
 // ----------------------------------------------------------- resolve_program
 
-/// Resolves `cmd` to a launchable path. Names with a path separator are used
-/// as given; bare names are searched on PATH (or `path_override`) trying PATHEXT.
+/// Extensions `CreateProcess` can launch (directly or via std's batch handling).
+const LAUNCHABLE_EXTS: [&str; 4] = ["com", "exe", "bat", "cmd"];
+
+fn has_launchable_ext(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| LAUNCHABLE_EXTS.iter().any(|l| l.eq_ignore_ascii_case(e)))
+        .unwrap_or(false)
+}
+
+/// PATHEXT filtered to what can actually be launched (so `.VBS`, `.JS`, `.MSC`
+/// are ignored), in PATHEXT order; defaults to `.COM;.EXE;.BAT;.CMD`.
+fn launchable_pathext(pathext: Option<&str>) -> Vec<String> {
+    let default = ".COM;.EXE;.BAT;.CMD";
+    let raw = pathext.unwrap_or(default);
+    let mut v: Vec<String> = raw
+        .split(';')
+        .map(|e| e.trim())
+        .filter(|e| {
+            e.strip_prefix('.')
+                .map(|x| LAUNCHABLE_EXTS.iter().any(|l| l.eq_ignore_ascii_case(x)))
+                .unwrap_or(false)
+        })
+        .map(|e| e.to_string())
+        .collect();
+    if v.is_empty() {
+        v = default.split(';').map(|e| e.to_string()).collect();
+    }
+    v
+}
+
+/// Resolves `cmd` to a launchable path.
+///
+/// - A name containing a path separator is a path: relative ones are resolved
+///   against the REQUESTED `cwd` (not the host's), trying PATHEXT extensions
+///   when it has no launchable extension of its own.
+/// - A bare name is searched on PATH (or `path_override`). Only the extensions
+///   com/exe/bat/cmd count as "already has an extension"; so `python3.12`
+///   still gets PATHEXT appended.
 pub(crate) fn resolve_program(
     cmd: &str,
+    cwd: &Path,
     path_override: Option<OsString>,
+) -> Result<PathBuf, TerminalError> {
+    let pathext = std::env::var("PATHEXT").ok();
+    resolve_program_with(cmd, cwd, path_override, pathext.as_deref())
+}
+
+pub(crate) fn resolve_program_with(
+    cmd: &str,
+    cwd: &Path,
+    path_override: Option<OsString>,
+    pathext: Option<&str>,
 ) -> Result<PathBuf, TerminalError> {
     let not_found = || TerminalError::NotFound(cmd.to_string());
     if cmd.is_empty() {
         return Err(not_found());
     }
+    let exts: Vec<String> = if cfg!(windows) && !has_launchable_ext(cmd) {
+        launchable_pathext(pathext)
+    } else {
+        Vec::new()
+    };
+    // Candidate file names for a base: the base itself if it is launchable as
+    // is (or on non-Windows), plus base + each extension.
+    let candidates = |base: PathBuf| -> Vec<PathBuf> {
+        let mut v = Vec::new();
+        if exts.is_empty() {
+            v.push(base.clone());
+        }
+        for e in &exts {
+            let mut s = base.clone().into_os_string();
+            s.push(e);
+            v.push(PathBuf::from(s));
+        }
+        v
+    };
     if cmd.contains('/') || cmd.contains('\\') {
-        return Ok(PathBuf::from(cmd));
+        let p = PathBuf::from(cmd);
+        let p = if p.is_absolute() { p } else { cwd.join(p) };
+        return candidates(p).into_iter().find(|c| c.is_file()).ok_or_else(not_found);
     }
     let path = path_override.or_else(|| std::env::var_os("PATH")).ok_or_else(not_found)?;
-    let has_ext = Path::new(cmd).extension().is_some();
-    let exts: Vec<String> = if cfg!(windows) && !has_ext {
-        let pe = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-        pe.split(';').filter(|e| !e.is_empty()).map(|e| e.to_string()).collect()
-    } else {
-        vec![String::new()]
-    };
     for dir in std::env::split_paths(&path) {
         if dir.as_os_str().is_empty() {
             continue;
         }
-        for ext in &exts {
-            let cand = dir.join(format!("{cmd}{ext}"));
-            if cand.is_file() {
-                return Ok(cand);
-            }
+        if let Some(found) = candidates(dir.join(cmd)).into_iter().find(|c| c.is_file()) {
+            return Ok(found);
         }
     }
     Err(not_found())
@@ -158,26 +234,75 @@ struct Entry {
     kill: Mutex<Option<oneshot::Sender<()>>>,
 }
 
+impl Entry {
+    fn exited(&self) -> bool {
+        self.exit.borrow().is_some()
+    }
+}
+
 /// Agent-owned processes with piped output. Must be used inside a tokio runtime.
+///
+/// At most `MAX_LIVE_TERMINALS` run at once and at most
+/// `MAX_RETAINED_TERMINALS` are remembered; beyond that the oldest exited
+/// terminals are evicted (their ids become `Unknown`).
 pub struct AgentTerminals {
     events: UnboundedSender<TerminalEvent>,
     next: AtomicU64,
     terms: Mutex<HashMap<TerminalId, Arc<Entry>>>,
 }
 
+const KILL_TIMEOUT: Duration = Duration::from_secs(5);
+const READER_DRAIN: Duration = Duration::from_secs(2);
+
+/// Kills the process tree with `taskkill /T /F` (resolved from
+/// `%SystemRoot%\System32`), bounded by `KILL_TIMEOUT`.
 #[cfg(windows)]
-fn kill_tree(pid: u32) {
-    use std::os::windows::process::CommandExt;
-    let _ = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+async fn kill_tree(pid: u32) -> Result<(), String> {
+    let exe = match std::env::var_os("SystemRoot") {
+        Some(r) => PathBuf::from(r).join("System32").join("taskkill.exe"),
+        None => PathBuf::from("taskkill"),
+    };
+    let mut c = Command::new(exe);
+    c.args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(0x0800_0000)
-        .status();
+        .kill_on_drop(true)
+        .creation_flags(0x0800_0000);
+    match tokio::time::timeout(KILL_TIMEOUT, c.status()).await {
+        Ok(Ok(st)) if st.success() => Ok(()),
+        Ok(Ok(st)) => Err(format!("taskkill exited with {st}")),
+        Ok(Err(e)) => Err(format!("taskkill failed to run: {e}")),
+        Err(_) => Err("taskkill timed out".into()),
+    }
 }
 #[cfg(not(windows))]
-fn kill_tree(_pid: u32) {}
+async fn kill_tree(_pid: u32) -> Result<(), String> {
+    Ok(())
+}
+
+/// Terminates the child (tree first), with every wait bounded. Returns the exit
+/// code, or None if it could not be confirmed dead (logged).
+async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>) -> Option<i32> {
+    if let Some(pid) = pid {
+        if let Err(e) = kill_tree(pid).await {
+            eprintln!("terminals: tree kill of pid {pid}: {e}");
+        }
+    }
+    if let Ok(Ok(st)) = tokio::time::timeout(KILL_TIMEOUT, child.wait()).await {
+        return st.code();
+    }
+    if let Err(e) = child.start_kill() {
+        eprintln!("terminals: kill failed: {e}");
+    }
+    match tokio::time::timeout(KILL_TIMEOUT, child.wait()).await {
+        Ok(Ok(st)) => st.code(),
+        _ => {
+            eprintln!("terminals: process did not exit after kill");
+            None
+        }
+    }
+}
 
 impl AgentTerminals {
     pub fn new(events: UnboundedSender<TerminalEvent>) -> Self {
@@ -190,8 +315,17 @@ impl AgentTerminals {
         args: &[String],
         cwd: &Path,
     ) -> Result<TerminalId, TerminalError> {
-        let program = resolve_program(cmd, None)?;
+        let mut terms = self.terms.lock().unwrap();
+        if terms.values().filter(|e| !e.exited()).count() >= MAX_LIVE_TERMINALS {
+            return Err(TerminalError::TooMany);
+        }
+        let program = resolve_program(cmd, cwd, None)?;
         let mut c = Command::new(&program);
+        // SECURITY: for .bat/.cmd programs (npm.cmd, npx.cmd) we rely on the
+        // standard library's batch-file argument escaping (the fix for
+        // CVE-2024-24576, Rust 1.77.2+; see `rust-version`). Arguments the std
+        // cannot escape safely make spawn fail with InvalidInput, surfaced here
+        // as `TerminalError::Io`. We never build a shell command string.
         c.args(args)
             .current_dir(cwd)
             .stdin(Stdio::null())
@@ -241,24 +375,33 @@ impl AgentTerminals {
         tokio::spawn(async move {
             let code = tokio::select! {
                 s = child.wait() => s.ok().and_then(|s| s.code()),
-                _ = kill_rx => {
-                    if let Some(pid) = pid {
-                        let _ = tokio::task::spawn_blocking(move || kill_tree(pid)).await;
-                    }
-                    let _ = child.kill().await;
-                    child.wait().await.ok().and_then(|s| s.code())
-                }
+                _ = kill_rx => terminate(&mut child, pid).await,
             };
-            // Let readers drain; grandchildren holding the pipes open must not hang us.
-            for r in readers {
-                let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
+            // One shared deadline for both readers; a grandchild holding a pipe
+            // open must not delay Exited. Stragglers are aborted so nothing is
+            // emitted after Exited.
+            let deadline = Instant::now() + READER_DRAIN;
+            for mut r in readers {
+                if tokio::time::timeout_at(deadline, &mut r).await.is_err() {
+                    r.abort();
+                    let _ = r.await;
+                }
             }
             let _ = events.send(TerminalEvent::Exited { id, code });
             let _ = exit_tx.send(Some(code));
         });
 
         let entry = Arc::new(Entry { ring, exit: exit_rx, kill: Mutex::new(Some(kill_tx)) });
-        self.terms.lock().unwrap().insert(id, entry);
+        terms.insert(id, entry);
+        while terms.len() > MAX_RETAINED_TERMINALS {
+            let oldest = terms.iter().filter(|(_, e)| e.exited()).map(|(k, _)| *k).min();
+            match oldest {
+                Some(k) => {
+                    terms.remove(&k);
+                }
+                None => break,
+            }
+        }
         Ok(id)
     }
 
@@ -279,7 +422,7 @@ impl AgentTerminals {
 
     /// Kills a still-running process (the whole tree via `taskkill /T` on
     /// Windows; best effort, a grandchild that escapes may survive) and
-    /// forgets the terminal.
+    /// forgets the terminal. Harmless if it already exited or is unknown.
     pub fn release(&self, id: TerminalId) {
         let entry = self.terms.lock().unwrap().remove(&id);
         if let Some(entry) = entry {
@@ -310,6 +453,36 @@ fn complete_prefix(b: &[u8]) -> usize {
     }
 }
 
+/// Lossily decodes a prefix of `raw` into a String of at most `MAX_CHUNK`
+/// bytes (invalid bytes become 3-byte U+FFFD, so the String can be larger than
+/// the raw bytes). Returns the string and how many raw bytes it consumed.
+fn take_chunk(raw: &[u8]) -> (String, usize) {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in raw.utf8_chunks() {
+        let v = ch.valid();
+        if out.len() + v.len() > MAX_CHUNK {
+            let mut k = MAX_CHUNK - out.len();
+            while !v.is_char_boundary(k) {
+                k -= 1;
+            }
+            out.push_str(&v[..k]);
+            return (out, used + k);
+        }
+        out.push_str(v);
+        used += v.len();
+        let inv = ch.invalid();
+        if !inv.is_empty() {
+            if out.len() + 3 > MAX_CHUNK {
+                return (out, used);
+            }
+            out.push('\u{FFFD}');
+            used += inv.len();
+        }
+    }
+    (out, used)
+}
+
 fn flush(
     pending: &mut Vec<u8>,
     all: bool,
@@ -324,7 +497,11 @@ fn flush(
         if cut == 0 {
             break;
         }
-        let chunk: Vec<u8> = pending.drain(..cut).collect();
+        let (chunk, used) = take_chunk(&pending[..cut]);
+        if used == 0 {
+            break;
+        }
+        pending.drain(..used);
         if emitted.load(Ordering::Relaxed) >= EMISSION_CAP {
             if !capped.swap(true, Ordering::SeqCst) {
                 let _ = events.send(TerminalEvent::Truncated { id });
@@ -332,10 +509,7 @@ fn flush(
             continue;
         }
         emitted.fetch_add(chunk.len(), Ordering::Relaxed);
-        let _ = events.send(TerminalEvent::Output {
-            id,
-            chunk: String::from_utf8_lossy(&chunk).into_owned(),
-        });
+        let _ = events.send(TerminalEvent::Output { id, chunk });
     }
 }
 
@@ -403,37 +577,58 @@ fn pty_err<E: std::fmt::Display>(e: E) -> TerminalError {
 }
 
 impl UserPty {
+    /// Spawns `shell` on a pty. Events go through a bounded channel (create it
+    /// with `mpsc::channel(PTY_CHANNEL_CAPACITY)`): the reader thread uses
+    /// `blocking_send`, so a slow consumer backpressures the child exactly as a
+    /// real terminal would. If the receiver is dropped the reader keeps
+    /// draining and discarding so teardown cannot hang.
     pub fn spawn(
         shell: &str,
         cwd: &Path,
         rows: u16,
         cols: u16,
-        events: UnboundedSender<PtyEvent>,
+        events: Sender<PtyEvent>,
     ) -> Result<UserPty, TerminalError> {
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        if rows == 0 || cols == 0 {
+            return Err(TerminalError::InvalidSize);
+        }
         let pair = native_pty_system()
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(pty_err)?;
-        let program = resolve_program(shell, None)?;
+        let program = resolve_program(shell, cwd, None)?;
         let mut cb = CommandBuilder::new(program);
         cb.cwd(cwd);
         let mut child = pair.slave.spawn_command(cb).map_err(pty_err)?;
         drop(pair.slave);
-        let mut reader = pair.master.try_clone_reader().map_err(pty_err)?;
-        let writer = pair.master.take_writer().map_err(pty_err)?;
+        let io = pair
+            .master
+            .try_clone_reader()
+            .map_err(pty_err)
+            .and_then(|r| pair.master.take_writer().map_err(pty_err).map(|w| (r, w)));
+        let (mut reader, writer) = match io {
+            Ok(x) => x,
+            Err(e) => {
+                let _ = child.kill();
+                return Err(e);
+            }
+        };
         let killer = child.clone_killer();
 
         // Reader: blocking, forwards chunks of up to 8 KB, ends at EOF/error.
         let tx = events.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
+            let mut open = true;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    // Keep draining even if the receiver is gone: ConPTY teardown
-                    // can block while its output is not being read.
                     Ok(n) => {
-                        let _ = tx.send(PtyEvent::Output(buf[..n].to_vec()));
+                        // Keep draining even if the receiver is gone: ConPTY
+                        // teardown can block while its output is not being read.
+                        if open && tx.blocking_send(PtyEvent::Output(buf[..n].to_vec())).is_err() {
+                            open = false;
+                        }
                     }
                 }
             }
@@ -445,12 +640,12 @@ impl UserPty {
             match child.try_wait() {
                 Ok(Some(st)) => {
                     std::thread::sleep(Duration::from_millis(150));
-                    let _ = events.send(PtyEvent::Exited(Some(st.exit_code() as i32)));
+                    let _ = events.blocking_send(PtyEvent::Exited(Some(st.exit_code() as i32)));
                     break;
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
                 Err(_) => {
-                    let _ = events.send(PtyEvent::Exited(None));
+                    let _ = events.blocking_send(PtyEvent::Exited(None));
                     break;
                 }
             }
@@ -469,6 +664,9 @@ impl UserPty {
     }
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        if rows == 0 || cols == 0 {
+            return Err(TerminalError::InvalidSize);
+        }
         match self.master.lock().unwrap().as_ref() {
             Some(m) => m
                 .resize(portable_pty::PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -496,11 +694,15 @@ impl Drop for UserPty {
 mod tests {
     use super::*;
 
+    fn dir_os(d: &Path) -> Option<OsString> {
+        Some(d.as_os_str().to_owned())
+    }
+
     #[test]
     fn resolves_cmd_shim_on_path() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("hello.cmd"), "@echo hi\r\n").unwrap();
-        let p = resolve_program("hello", Some(dir.path().as_os_str().to_owned())).unwrap();
+        let p = resolve_program("hello", dir.path(), dir_os(dir.path())).unwrap();
         assert!(p.to_string_lossy().to_lowercase().ends_with("hello.cmd"), "{p:?}");
         assert!(p.starts_with(dir.path()));
     }
@@ -508,8 +710,42 @@ mod tests {
     #[test]
     fn unknown_program_is_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let r = resolve_program("nope-nope", Some(dir.path().as_os_str().to_owned()));
+        let r = resolve_program("nope-nope", dir.path(), dir_os(dir.path()));
         assert!(matches!(r, Err(TerminalError::NotFound(_))));
+    }
+
+    #[test]
+    fn resolves_dotted_name_like_python3_12() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("python3.12.exe"), b"").unwrap();
+        let p = resolve_program("python3.12", dir.path(), dir_os(dir.path())).unwrap();
+        assert!(p.to_string_lossy().to_lowercase().ends_with("python3.12.exe"), "{p:?}");
+        // an explicit launchable extension is used as is
+        let p = resolve_program("python3.12.exe", dir.path(), dir_os(dir.path())).unwrap();
+        assert!(p.to_string_lossy().ends_with("python3.12.exe"));
+    }
+
+    #[test]
+    fn ignores_vbs_in_pathext() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foo.vbs"), b"").unwrap();
+        let r = resolve_program_with("foo", dir.path(), dir_os(dir.path()), Some(".VBS;.JS;.EXE"));
+        assert!(matches!(r, Err(TerminalError::NotFound(_))), "{r:?}");
+        std::fs::write(dir.path().join("foo.exe"), b"").unwrap();
+        let p = resolve_program_with("foo", dir.path(), dir_os(dir.path()), Some(".VBS;.EXE"))
+            .unwrap();
+        assert!(p.to_string_lossy().to_lowercase().ends_with("foo.exe"));
+    }
+
+    #[test]
+    fn relative_path_resolves_against_requested_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("tool.cmd"), "@echo x\r\n").unwrap();
+        let p = resolve_program(".\\sub\\tool.cmd", dir.path(), None).unwrap();
+        assert!(p.starts_with(dir.path()), "{p:?}");
+        let p = resolve_program("sub/tool", dir.path(), None).unwrap();
+        assert!(p.to_string_lossy().to_lowercase().ends_with("tool.cmd"), "{p:?}");
     }
 
     #[tokio::test]
@@ -530,5 +766,15 @@ mod tests {
         assert_eq!(complete_prefix(&b[..2]), 1);
         assert_eq!(complete_prefix(b), 3);
         assert_eq!(complete_prefix(&[b'a', 0xFF, b'b']), 3);
+    }
+
+    #[test]
+    fn take_chunk_bounds_lossy_expansion() {
+        let raw = vec![0xFFu8; 40_000];
+        let (s, used) = take_chunk(&raw[..MAX_CHUNK]);
+        assert!(s.len() <= MAX_CHUNK);
+        assert!(used > 0 && used < MAX_CHUNK);
+        let (s, used) = take_chunk("é".repeat(MAX_CHUNK).as_bytes());
+        assert!(s.len() <= MAX_CHUNK && used == s.len());
     }
 }
