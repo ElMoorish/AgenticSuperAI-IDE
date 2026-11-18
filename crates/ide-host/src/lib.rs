@@ -2,6 +2,7 @@ pub mod acp;
 pub mod editor;
 pub mod files;
 pub mod supervisor;
+pub mod terminals;
 pub mod workspace;
 
 pub use acp::{AcpError, AgentEvent};
