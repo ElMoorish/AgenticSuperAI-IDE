@@ -1,4 +1,6 @@
 import type { CSSProperties } from "react";
+import { EditorArea } from "../editor/EditorArea";
+import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
 import { Splitter } from "./Splitter";
 import { StatusBar } from "./StatusBar";
@@ -6,8 +8,8 @@ import { TitleBar } from "./TitleBar";
 
 /**
  * Workbench grid (Tasks 9-13 fill the regions):
- *   .side   = file panel      -> Task 9 (explorer)
- *   .ed     = editor area     -> Task 10/11 (tabs, Monaco)
+ *   .side   = file panel      -> Task 9 (file tree)
+ *   .ed     = editor area     -> Task 9 (tabs, Monaco)
  *   .bottom = bottom panel    -> Task 12 (terminal, build)
  *   .agent  = agent panel     -> Task 13 (chat, approvals, gauges)
  */
@@ -51,19 +53,12 @@ export function Shell() {
       </nav>
 
       <aside className={`side${collapsed.filePanel ? " panel-collapsed" : ""}`} aria-label="Files">
-        <h2>FILES</h2>
-        <p>Open a folder to browse files.</p>
+        <FileTree />
       </aside>
       {split("filePanel", "Resize file panel", "vertical", 1)}
 
       <div className="main">
-        <section className="ed" aria-label="Editor">
-          <div className="tabs"><span>Welcome</span></div>
-          <div className="empty">
-            <b>No file open</b>
-            <span>Pick a file from the explorer, or ask the agent to start a task.</span>
-          </div>
-        </section>
+        <EditorArea />
         {split("bottom", "Resize bottom panel", "horizontal", -1)}
         <section className={`bottom${collapsed.bottom ? " panel-collapsed" : ""}`} aria-label="Bottom panel">
           <div className="ptabs"><b>Terminal</b></div>

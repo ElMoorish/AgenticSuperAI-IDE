@@ -41,6 +41,11 @@ export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/** Channels need the Tauri runtime to even be constructed; fail with no_tauri before creating one. */
+function requireTauri(cmd: CommandName): void {
+  if (!isTauri()) throw new IpcError("no_tauri", `${cmd}: not running inside the desktop app`);
+}
+
 async function call<T>(cmd: CommandName, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new IpcError("no_tauri", `${cmd}: not running inside the desktop app`);
   try {
@@ -117,19 +122,27 @@ export const readFile = (rel: string) => call<ReadFileResult>("read_file", { rel
 /** Rejects with code "conflict" when the stamp is stale. */
 export const saveFile = (rel: string, text: string, stamp: Stamp) => call<Stamp>("save_file", { rel, text, stamp });
 
+let subscribeGeneration = 0;
 /**
- * Register the single listener for ALL UiEvents (call once at startup). The host replays the
- * latest agentState, an undelivered turnEnd and every pending approval on (re)subscribe, so
- * consumers MUST dedupe approvals by id. Returns the channel (kept alive by the caller).
+ * Register the listener for ALL UiEvents. The host replays the latest agentState, an undelivered
+ * turnEnd and every pending approval on (re)subscribe, so consumers MUST dedupe approvals by id.
+ * Tauri channels cannot be disposed from JS, so each call bumps a generation and messages from
+ * any earlier channel (e.g. a React strict-mode double mount) are ignored. Prefer `onUiEvent`
+ * (events.ts), which subscribes once and fans out. Returns the channel (kept alive by the caller).
  */
 export async function subscribeEvents(onEvent: (ev: UiEvent) => void): Promise<Channel<UiEvent>> {
+  requireTauri("subscribe_events");
+  const gen = ++subscribeGeneration;
   const ch = new Channel<UiEvent>();
-  ch.onmessage = onEvent;
+  ch.onmessage = (ev) => {
+    if (gen === subscribeGeneration) onEvent(ev);
+  };
   await call<void>("subscribe_events", { onEvent: ch });
   return ch;
 }
 /** `onEvent` REPLACES the current listener; pass the same handler used for subscribeEvents. */
 export async function agentPrompt(mode: AgentMode, text: string, onEvent: (ev: UiEvent) => void): Promise<void> {
+  requireTauri("agent_prompt");
   const ch = new Channel<UiEvent>();
   ch.onmessage = onEvent;
   await call<void>("agent_prompt", { mode, text, onEvent: ch });
@@ -152,6 +165,7 @@ export const setSettings = (settings: Settings) => call<Settings>("set_settings"
 
 /** Output arrives as byte arrays on `onOutput`. Returns the terminal id (max 8 live). */
 export async function startUserTerminal(rows: number, cols: number, onOutput: (bytes: number[]) => void): Promise<number> {
+  requireTauri("start_user_terminal");
   const ch = new Channel<number[]>();
   ch.onmessage = onOutput;
   return call<number>("start_user_terminal", { rows, cols, onOutput: ch });
