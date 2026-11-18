@@ -2,17 +2,42 @@ import { useEffect } from "react";
 import { Shell } from "./layout/Shell";
 import { useStore } from "./state/store";
 
-/** Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 zoom; Ctrl+B / Ctrl+J / Ctrl+Alt+B toggle file / bottom / agent panels. */
+export type ShortcutAction = "zoomIn" | "zoomOut" | "zoomReset" | "toggleFile" | "toggleAgent" | "toggleBottom";
+
+const EDITABLE = "input, textarea, select, [contenteditable=\"\"], [contenteditable=\"true\"], .xterm, .monaco-editor";
+
+/** Pure: which shortcut (if any) this event is. Exact modifier combos; never AltGr, never in editors/terminals. */
+export function shortcutAction(e: KeyboardEvent): ShortcutAction | null {
+  if (e.defaultPrevented) return null;
+  if (e.getModifierState?.("AltGraph")) return null;
+  const t = e.target;
+  if (t instanceof Element && t.closest(EDITABLE)) return null;
+  const mod = e.ctrlKey !== e.metaKey; // exactly one of ctrl/cmd
+  if (!mod) return null;
+  const k = e.key.toLowerCase();
+  if (e.altKey) return k === "b" && !e.shiftKey ? "toggleAgent" : null;
+  if (k === "=" || k === "+") return "zoomIn"; // shift is how + is typed on many layouts
+  if (k === "-" || k === "_") return "zoomOut";
+  if (e.shiftKey) return null;
+  if (k === "0") return "zoomReset";
+  if (k === "b") return "toggleFile";
+  if (k === "j") return "toggleBottom";
+  return null;
+}
+
+export const shouldHandleShortcut = (e: KeyboardEvent): boolean => shortcutAction(e) !== null;
+
+/** Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 zoom; Ctrl+B file panel, Ctrl+J bottom, Ctrl+Alt+B agent. */
 export function handleShortcut(e: KeyboardEvent): boolean {
-  if (!(e.ctrlKey || e.metaKey)) return false;
+  const a = shortcutAction(e);
+  if (!a) return false;
   const s = useStore.getState();
-  if (e.key === "=" || e.key === "+") s.zoomIn();
-  else if (e.key === "-" || e.key === "_") s.zoomOut();
-  else if (e.key === "0") s.zoomReset();
-  else if (e.key.toLowerCase() === "b" && e.altKey) s.toggleCollapsed("agent");
-  else if (e.key.toLowerCase() === "b" && !e.shiftKey) s.toggleCollapsed("filePanel");
-  else if (e.key.toLowerCase() === "j") s.toggleCollapsed("bottom");
-  else return false;
+  if (a === "zoomIn") s.zoomIn();
+  else if (a === "zoomOut") s.zoomOut();
+  else if (a === "zoomReset") s.zoomReset();
+  else if (a === "toggleAgent") s.toggleCollapsed("agent");
+  else if (a === "toggleFile") s.toggleCollapsed("filePanel");
+  else s.toggleCollapsed("bottom");
   e.preventDefault();
   return true;
 }

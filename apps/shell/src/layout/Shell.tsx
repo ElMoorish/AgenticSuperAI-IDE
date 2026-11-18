@@ -23,6 +23,7 @@ export function Shell() {
     "--bottom-h": `${px("bottom")}px`,
   } as CSSProperties;
 
+  const VARS: Record<PanelKey, string> = { filePanel: "--file-w", agent: "--agent-w", bottom: "--bottom-h" };
   const split = (key: PanelKey, label: string, orientation: "vertical" | "horizontal", sign: 1 | -1) => (
     <Splitter
       label={label}
@@ -32,6 +33,7 @@ export function Shell() {
       max={LIMITS[key].max}
       collapsed={collapsed[key]}
       sign={sign}
+      cssVar={VARS[key]}
       onChange={(v) => setSize(key, v)}
       onToggle={() => toggle(key)}
     />

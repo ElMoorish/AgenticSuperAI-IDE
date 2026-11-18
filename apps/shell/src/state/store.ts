@@ -31,8 +31,8 @@ export interface LayoutState {
   collapsed: Record<PanelKey, boolean>;
 }
 
-const STORAGE_KEY = "asa.ui.v1";
-const CHOSEN_KEY = "asa.theme.chosen";
+export const STORAGE_KEY = "asa.ui.v1";
+export const CHOSEN_KEY = "asa.theme.chosen";
 
 const freshLayout = (): LayoutState => ({
   sizes: { ...DEFAULT_SIZES },
@@ -111,7 +111,11 @@ export const useStore = create<StoreState>((set, get) => ({
     set({ layout });
     persist(layout, get().zoom);
   },
-  resetLayout: () => set({ layout: freshLayout() }),
+  resetLayout: () => {
+    const layout = freshLayout();
+    set({ layout });
+    persist(layout, get().zoom);
+  },
 
   setZoom: (z) => {
     const zoom = clampZoom(z);
@@ -130,9 +134,10 @@ export const useStore = create<StoreState>((set, get) => ({
     } catch {
       /* ignore */
     }
-    const cur = get().settings.value;
-    if (cur && isTauri()) {
+    if (isTauri()) {
       try {
+        // merge onto the freshest host copy so other fields are never reverted
+        const cur = await getSettings();
         const saved = await setSettings({ ...cur, theme: name });
         set({ settings: { value: saved, loaded: true, error: null } });
       } catch (e) {
@@ -163,6 +168,13 @@ export const useStore = create<StoreState>((set, get) => ({
       typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches;
     const wanted = value ? value.theme : local;
     const theme = resolveInitialTheme(isThemeName(wanted) ? wanted : null, chosen, prefersLight);
+    if (value && isThemeName(value.theme) && value.theme !== "harbor") {
+      try {
+        localStorage.setItem(CHOSEN_KEY, value.theme); // lets bootstrapTheme avoid a flash next launch
+      } catch {
+        /* ignore */
+      }
+    }
     applyTheme(theme);
     set({ settings: { value, loaded: true, error }, theme });
   },

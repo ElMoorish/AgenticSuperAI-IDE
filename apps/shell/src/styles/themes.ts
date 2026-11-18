@@ -11,7 +11,7 @@ export type ThemeName = (typeof THEME_NAMES)[number];
 export const TOKEN_NAMES = [
   "bg", "chrome", "panel", "raise", "line", "text", "muted",
   "accent", "accent-ink", "ok", "warn", "err", "add", "del",
-  "kw", "st", "fn", "nu", "cm", "focus-ring",
+  "kw", "st", "fn", "nu", "cm", "on-err", "focus-ring",
 ] as const;
 export type TokenName = (typeof TOKEN_NAMES)[number];
 export type ThemeTokens = Record<TokenName, string>;
@@ -34,7 +34,7 @@ const harbor: ThemeTokens = {
   text: "#dbe6f5", muted: "#7d8fa8", accent: "#5eb6ff", "accent-ink": "#04202f",
   ok: "#58d6a0", warn: "#f2b84b", err: "#ff6b6b", add: "#0f3a2b", del: "#43202a",
   kw: "#c3a6ff", st: "#8fe3a8", fn: "#7cc7ff", nu: "#ffb27a", cm: "#5d7089",
-  "focus-ring": "#5eb6ff",
+  "on-err": "#1a0505", "focus-ring": "#5eb6ff",
 };
 
 export const themes: Record<ThemeName, ThemeTokens> = {
@@ -42,7 +42,7 @@ export const themes: Record<ThemeName, ThemeTokens> = {
   graphite: {
     ...harbor,
     bg: "#1b1b1d", chrome: "#141416", panel: "#212124", raise: "#2a2a2e", line: "#35353a",
-    text: "#e6e6ea", muted: "#8d8d96", accent: "#ff8a3d", "accent-ink": "#2a1200",
+    text: "#e6e6ea", muted: "#92929a", accent: "#ff8a3d", "accent-ink": "#2a1200",
     ok: "#7ed492", add: "#1d3a25", del: "#41232a",
     kw: "#ff8a3d", st: "#9ece6a", fn: "#7aa2f7", nu: "#e0af68", cm: "#66666e",
     "focus-ring": "#ff8a3d",
@@ -58,10 +58,10 @@ export const themes: Record<ThemeName, ThemeTokens> = {
   paper: {
     ...harbor,
     bg: "#fdfbf7", chrome: "#f1ece3", panel: "#f7f3ec", raise: "#ffffff", line: "#ddd5c7",
-    text: "#2b2926", muted: "#837c70", accent: "#b4380d", "accent-ink": "#ffffff",
+    text: "#2b2926", muted: "#6f695f", accent: "#b4380d", "accent-ink": "#ffffff",
     ok: "#15803d", warn: "#b45309", err: "#c62828", add: "#d9f3e1", del: "#fbdcdc",
     kw: "#7c3aed", st: "#15803d", fn: "#1d4ed8", nu: "#b45309", cm: "#a39c8f",
-    "focus-ring": "#b4380d",
+    "on-err": "#ffffff", "focus-ring": "#b4380d",
   },
   phosphor: {
     ...harbor,

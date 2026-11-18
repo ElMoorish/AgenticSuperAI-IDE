@@ -52,7 +52,7 @@ async function call<T>(cmd: CommandName, args?: Record<string, unknown>): Promis
 
 // ---- DTOs (mirror state.rs; JSON field names as serialized) ----
 export interface WorkspaceInfo { root: string; name: string }
-export interface DirEntry { name: string; rel: string; isDir: boolean; size?: number }
+export interface DirEntry { name: string; rel: string; isDir: boolean; size?: number | null }
 export interface Stamp { mtimeMs: number; hash: string }
 export interface ReadFileResult { text: string; stamp: Stamp }
 export interface ProbeResult { ok: boolean; models: string[]; error: string | null }
@@ -140,7 +140,15 @@ export const resolveApproval = (id: number, accept: boolean) => call<void>("reso
 export const probeEndpoint = (url: string) => call<ProbeResult>("probe_endpoint", { url });
 export const detectServers = () => call<DetectedServer[]>("detect_servers");
 export const getSettings = () => call<Settings>("get_settings");
-export const setSettings = (settings: Settings) => call<Settings>("set_settings", { settings });
+export const SETTINGS_KEYS = ["endpoint", "model", "ignore", "theme", "font_size", "recent"] as const;
+/** Rust rejects unknown keys, so only the six known keys are ever sent. */
+export function pickSettings(s: Settings): Settings {
+  const o = s as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of SETTINGS_KEYS) out[k] = o[k];
+  return out as unknown as Settings;
+}
+export const setSettings = (settings: Settings) => call<Settings>("set_settings", { settings: pickSettings(settings) });
 
 /** Output arrives as byte arrays on `onOutput`. Returns the terminal id (max 8 live). */
 export async function startUserTerminal(rows: number, cols: number, onOutput: (bytes: number[]) => void): Promise<number> {
@@ -155,9 +163,13 @@ export const closeTerminal = (id: number) => call<void>("close_terminal", { id }
 // ---- window controls (custom title bar); no-ops outside Tauri ----
 export async function windowControl(action: "minimize" | "toggleMaximize" | "close"): Promise<void> {
   if (!isTauri()) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  if (action === "minimize") await w.minimize();
-  else if (action === "toggleMaximize") await w.toggleMaximize();
-  else await w.close();
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const w = getCurrentWindow();
+    if (action === "minimize") await w.minimize();
+    else if (action === "toggleMaximize") await w.toggleMaximize();
+    else await w.close();
+  } catch (e) {
+    throw normalizeError(e);
+  }
 }

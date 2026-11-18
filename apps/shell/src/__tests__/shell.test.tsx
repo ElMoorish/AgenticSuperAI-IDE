@@ -31,7 +31,7 @@ describe("shell", () => {
     fireEvent.keyDown(sep, { key: "End" });
     expect(Number(sep.getAttribute("aria-valuenow"))).toBe(LIMITS.filePanel.max);
     fireEvent.keyDown(sep, { key: "Enter" });
-    expect(sep.getAttribute("aria-valuenow")).toBe("0");
+    expect(sep.getAttribute("aria-valuetext")).toBe("collapsed");
   });
 
   it("agent splitter grows when moved left", () => {

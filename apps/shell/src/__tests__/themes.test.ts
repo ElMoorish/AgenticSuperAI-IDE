@@ -50,3 +50,21 @@ describe("themes", () => {
     expect(contrastRatio("#777777", "#ffffff")).toBeCloseTo(4.48, 1);
   });
 });
+
+describe("themes AA text (fix round 1)", () => {
+  it("muted_meets_AA_on_every_surface", () => {
+    for (const name of THEME_NAMES) {
+      const t = themes[name];
+      for (const surf of ["bg", "chrome", "panel", "raise"] as const) {
+        expect(contrastRatio(t.muted, t[surf]), `${name} muted/${surf}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+  it("on_err_text_meets_AA_on_err", () => {
+    for (const name of THEME_NAMES) {
+      const t = themes[name];
+      expect(t["on-err"], name).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(contrastRatio(t["on-err"], t.err), `${name} on-err/err`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

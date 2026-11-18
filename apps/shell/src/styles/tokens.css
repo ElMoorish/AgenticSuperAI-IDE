@@ -5,7 +5,7 @@
   --text:#dbe6f5; --muted:#7d8fa8; --accent:#5eb6ff; --accent-ink:#04202f;
   --ok:#58d6a0; --warn:#f2b84b; --err:#ff6b6b; --add:#0f3a2b; --del:#43202a;
   --kw:#c3a6ff; --st:#8fe3a8; --fn:#7cc7ff; --nu:#ffb27a; --cm:#5d7089;
-  --focus-ring:#5eb6ff;
+  --on-err:#1a0505; --focus-ring:#5eb6ff;
   --zoom: 1;
   --file-w: 186px; --agent-w: 318px; --bottom-h: 206px;
   --font-ui: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
@@ -61,7 +61,7 @@ button:disabled { cursor: default; opacity: 0.55; }
   display: grid; place-items: center; font-size: 0.8125rem;
 }
 .winbtns button:hover { background: var(--raise); color: var(--text); }
-.winbtns button.close:hover { background: var(--err); color: #fff; }
+.winbtns button.close:hover { background: var(--err); color: var(--on-err); }
 .winbtns button:focus-visible { outline-offset: -3px; }
 
 .rail {
@@ -108,14 +108,17 @@ button:disabled { cursor: default; opacity: 0.55; }
 
 .status {
   grid-column: 1 / -1; background: var(--chrome); border-top: 1px solid var(--line); display: flex;
-  gap: 1rem; align-items: center; padding: 0 0.75rem; font-size: 0.72rem; color: var(--muted); white-space: nowrap; overflow: hidden;
+  gap: 1rem; align-items: center; padding: 0 0.75rem; font-size: 0.72rem; color: var(--muted); white-space: nowrap; overflow: visible; min-width: 0;
 }
 .status b { color: var(--text); font-weight: 500; }
 .status .r { margin-left: auto; display: inline-flex; gap: 0.25rem; align-items: center; }
+/* inset ring so the 1.5rem bar never clips it */
+.status button:focus-visible { outline-offset: -2px; }
 .status button { background: transparent; border: 0; color: var(--muted); padding: 0 0.25rem; border-radius: 3px; }
 .status button:hover { color: var(--text); }
 
 /* ---- splitters ---- */
+body.resizing { user-select: none; cursor: col-resize; }
 .splitter { background: var(--line); position: relative; touch-action: none; }
 .splitter::after { content: ""; position: absolute; inset: 0; }
 .splitter[aria-orientation="vertical"] { cursor: col-resize; }
