@@ -2,7 +2,7 @@
 //! Writes and permissions never act directly: they yield pending values that
 //! the UI must approve.
 
-use crate::files::read_stamped;
+use crate::files::{detect_eol, normalise_eol, read_stamped};
 use crate::workspace::{FsError, Workspace};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -106,6 +106,12 @@ impl<B: BufferView> EditorHandler<B> {
                     Ok(t) => t.unwrap_or_default(),
                     Err(e) => return fs_err(&e),
                 };
+                // Keep the file's dominant EOL; new/empty files keep the agent text.
+                let new = if old.is_empty() {
+                    new.to_string()
+                } else {
+                    normalise_eol(new, detect_eol(&old))
+                };
                 let rel = abs
                     .strip_prefix(self.ws.root())
                     .unwrap_or(&abs)
@@ -116,7 +122,7 @@ impl<B: BufferView> EditorHandler<B> {
                     agent_id: id,
                     path: rel,
                     old,
-                    new: new.to_string(),
+                    new,
                 })
             }
             "session/request_permission" => {

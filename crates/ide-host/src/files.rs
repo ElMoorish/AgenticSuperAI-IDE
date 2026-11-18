@@ -10,7 +10,7 @@
 use crate::workspace::{FsError, Workspace};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -85,20 +85,27 @@ pub fn read_stamped(ws: &Workspace, p: &str) -> Result<(String, FileStamp), FsEr
     Ok((text.to_string(), FileStamp { mtime, hash }))
 }
 
+/// Atomically write `text` to `p` (temp file in the same directory, sync, rename).
+///
+/// With `expected: Some(stamp)` the write is refused with `Conflict` if the
+/// file's content hash differs, or the file was deleted. The check is made once
+/// up front and again immediately before the rename, which narrows the race
+/// but cannot close it: a write landing between that final check and the rename
+/// cannot be excluded without OS-level locking. The host does nothing further;
+/// the UI's next save will see a `Conflict`. Parent directories created for
+/// this write are removed again if the write fails.
 pub fn write_atomic(
     ws: &Workspace,
     p: &str,
     text: &str,
     expected: Option<&FileStamp>,
 ) -> Result<FileStamp, WriteError> {
-    write_atomic_with(ws, p, text, expected, false)
+    write_atomic_hooked(ws, p, text, expected, false, None)
 }
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// As `write_atomic`; `fail_after_temp` is a test hook that fails after the temp
-/// file has been fully written, to prove the original survives and the temp is
-/// cleaned up.
+/// Test hook: `fail_after_temp` fails after the temp file is fully written.
 #[doc(hidden)]
 pub fn write_atomic_with(
     ws: &Workspace,
@@ -106,6 +113,20 @@ pub fn write_atomic_with(
     text: &str,
     expected: Option<&FileStamp>,
     fail_after_temp: bool,
+) -> Result<FileStamp, WriteError> {
+    write_atomic_hooked(ws, p, text, expected, fail_after_temp, None)
+}
+
+/// Test hook: `before_rename` runs after the temp file is written and before the
+/// final conflict re-check.
+#[doc(hidden)]
+pub fn write_atomic_hooked(
+    ws: &Workspace,
+    p: &str,
+    text: &str,
+    expected: Option<&FileStamp>,
+    fail_after_temp: bool,
+    before_rename: Option<&dyn Fn()>,
 ) -> Result<FileStamp, WriteError> {
     let abs = ws.resolve(p)?;
     let existing = match fs::read(&abs) {
@@ -129,7 +150,24 @@ pub fn write_atomic_with(
     let dir = abs
         .parent()
         .ok_or_else(|| FsError::Io(format!("{}: no parent directory", abs.display())))?;
-    fs::create_dir_all(dir).map_err(|e| io_err(e, dir))?;
+    // Directories this write will create, deepest first.
+    let mut created: Vec<PathBuf> = Vec::new();
+    let mut cur = dir.to_path_buf();
+    while !cur.exists() {
+        created.push(cur.clone());
+        if !cur.pop() {
+            break;
+        }
+    }
+    let cleanup_dirs = |created: &[PathBuf]| {
+        for d in created {
+            let _ = fs::remove_dir(d);
+        }
+    };
+    if let Err(e) = fs::create_dir_all(dir) {
+        cleanup_dirs(&created);
+        return Err(io_err(e, dir).into());
+    }
     let name = abs.file_name().unwrap().to_string_lossy();
     let tmp = dir.join(format!(
         ".{name}.asa-tmp-{}-{}",
@@ -137,20 +175,35 @@ pub fn write_atomic_with(
         TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
 
-    let result = (|| -> Result<(), FsError> {
+    let result = (|| -> Result<(), WriteError> {
         let mut f = fs::File::create(&tmp).map_err(|e| io_err(e, &tmp))?;
         f.write_all(&out).map_err(|e| io_err(e, &tmp))?;
         f.flush().map_err(|e| io_err(e, &tmp))?;
         f.sync_all().map_err(|e| io_err(e, &tmp))?;
         drop(f);
         if fail_after_temp {
-            return Err(FsError::Io(format!("{}: injected failure", tmp.display())));
+            return Err(FsError::Io(format!("{}: injected failure", tmp.display())).into());
         }
-        fs::rename(&tmp, &abs).map_err(|e| io_err(e, &abs))
+        if let Some(h) = before_rename {
+            h();
+        }
+        if let Some(exp) = expected {
+            match fs::read(&abs) {
+                Ok(b) if content_hash(&b) == exp.hash => {}
+                Ok(_) => return Err(WriteError::Conflict),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(WriteError::Conflict)
+                }
+                Err(e) => return Err(io_err(e, &abs).into()),
+            }
+        }
+        fs::rename(&tmp, &abs).map_err(|e| io_err(e, &abs))?;
+        Ok(())
     })();
     if let Err(e) = result {
         let _ = fs::remove_file(&tmp);
-        return Err(WriteError::Fs(e));
+        cleanup_dirs(&created);
+        return Err(e);
     }
 
     let mtime = fs::metadata(&abs)
@@ -162,6 +215,33 @@ pub fn write_atomic_with(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eol {
+    Lf,
+    CrLf,
+}
+
+/// Dominant line ending: CRLF only if the `\r\n` count exceeds the lone `\n`
+/// count and is non-zero; otherwise LF (including empty / no newline).
+pub fn detect_eol(text: &str) -> Eol {
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+    if crlf > 0 && crlf > lf {
+        Eol::CrLf
+    } else {
+        Eol::Lf
+    }
+}
+
+/// Rewrite every line ending in `text` (CRLF or LF) to `eol`.
+pub fn normalise_eol(text: &str, eol: Eol) -> String {
+    let lf = text.replace("\r\n", "\n");
+    match eol {
+        Eol::Lf => lf,
+        Eol::CrLf => lf.replace('\n', "\r\n"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +250,22 @@ mod tests {
     fn fnv_known_vectors() {
         assert_eq!(content_hash(b""), 0xcbf29ce484222325);
         assert_eq!(content_hash(b"a"), 0xaf63dc4c8601ec8c);
+    }
+
+    #[test]
+    fn detect_eol_cases() {
+        assert_eq!(detect_eol("a\r\nb\r\n"), Eol::CrLf);
+        assert_eq!(detect_eol("a\nb\n"), Eol::Lf);
+        assert_eq!(detect_eol("a\r\nb\r\nc\n"), Eol::CrLf);
+        assert_eq!(detect_eol("a\r\nb\nc\n"), Eol::Lf);
+        assert_eq!(detect_eol(""), Eol::Lf);
+        assert_eq!(detect_eol("no newline"), Eol::Lf);
+    }
+
+    #[test]
+    fn normalise_eol_cases() {
+        assert_eq!(normalise_eol("a\nb\r\nc", Eol::CrLf), "a\r\nb\r\nc");
+        assert_eq!(normalise_eol("a\nb\r\nc", Eol::Lf), "a\nb\nc");
+        assert_eq!(normalise_eol("", Eol::CrLf), "");
     }
 }
