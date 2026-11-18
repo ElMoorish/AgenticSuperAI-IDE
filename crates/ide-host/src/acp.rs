@@ -9,7 +9,7 @@ pub enum AgentEvent {
     /// `session/update` notification from the agent.
     Update { session_id: String, update: Value },
     /// A request from the agent to the editor; answer with `Supervisor::respond`.
-    Request { id: u64, method: String, params: Value },
+    Request { id: Value, method: String, params: Value },
     /// The process exited.
     Exited { code: Option<i32> },
     /// The process was restarted (`attempt` counts restarts, from 1).
@@ -47,7 +47,7 @@ impl std::error::Error for AcpError {}
 pub enum Incoming {
     Response { id: u64, result: Result<Value, Value> },
     Notification { method: String, params: Value },
-    Request { id: u64, method: String, params: Value },
+    Request { id: Value, method: String, params: Value },
 }
 
 /// Classify one JSON line. Errors are human-readable and meant for logging.
@@ -59,8 +59,7 @@ pub fn parse_line(line: &str) -> Result<Incoming, String> {
     let params = obj.get("params").cloned().unwrap_or(Value::Null);
     match (id, method) {
         (Some(id), Some(m)) => {
-            let id = id.as_u64().ok_or("request id is not an unsigned integer")?;
-            Ok(Incoming::Request { id, method: m.to_string(), params })
+            Ok(Incoming::Request { id: id.clone(), method: m.to_string(), params })
         }
         (None, Some(m)) => Ok(Incoming::Notification { method: m.to_string(), params }),
         (Some(id), None) => {
@@ -91,7 +90,7 @@ pub fn encode_notification(method: &str, params: Value) -> String {
     line(serde_json::json!({"jsonrpc":"2.0","method":method,"params":params}))
 }
 
-pub fn encode_response(id: u64, result: Result<Value, Value>) -> String {
+pub fn encode_response(id: Value, result: Result<Value, Value>) -> String {
     match result {
         Ok(r) => line(serde_json::json!({"jsonrpc":"2.0","id":id,"result":r})),
         Err(e) => line(serde_json::json!({"jsonrpc":"2.0","id":id,"error":e})),
@@ -119,7 +118,7 @@ mod tests {
         );
         assert_eq!(
             parse_line(r#"{"id":1000,"method":"fs/read_text_file","params":{"path":"x"}}"#).unwrap(),
-            Incoming::Request { id: 1000, method: "fs/read_text_file".into(), params: json!({"path":"x"}) }
+            Incoming::Request { id: json!(1000), method: "fs/read_text_file".into(), params: json!({"path":"x"}) }
         );
     }
 
@@ -135,7 +134,7 @@ mod tests {
         let s = encode_request(7, "m", json!({"t":"a\nb"}));
         assert!(s.ends_with('\n'));
         assert_eq!(s.matches('\n').count(), 1);
-        assert!(encode_response(1, Err(json!("x"))).contains("\"error\""));
+        assert!(encode_response(json!(1), Err(json!("x"))).contains("\"error\""));
         assert!(!encode_notification("session/cancel", json!({})).contains("\"id\""));
     }
 }

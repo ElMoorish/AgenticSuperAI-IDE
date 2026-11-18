@@ -43,6 +43,11 @@ impl AgentConfig {
     }
 }
 
+/// Receiving end of the agent event stream. Unbounded so the reader/lifecycle tasks never
+/// block on a slow consumer (which would stall response routing).
+pub type EventRx = mpsc::UnboundedReceiver<AgentEvent>;
+type EventTx = mpsc::UnboundedSender<AgentEvent>;
+
 type Pending = oneshot::Sender<Result<Value, AcpError>>;
 
 struct State {
@@ -74,20 +79,26 @@ pub struct Supervisor {
 
 impl Supervisor {
     /// Spawn the agent and start supervising it. Must be called inside a tokio runtime.
-    pub fn start(cfg: AgentConfig) -> (Supervisor, mpsc::Receiver<AgentEvent>) {
+    ///
+    /// Events are queued without bound: the response path never depends on the consumer
+    /// draining. The host must coalesce/cap on its side.
+    pub fn start(cfg: AgentConfig) -> (Supervisor, EventRx) {
         let inner = Arc::new(Inner {
             state: Mutex::new(State { closed: false, tx: None, pending: HashMap::new(), next_id: 1 }),
             stop: Notify::new(),
         });
-        let (events_tx, events_rx) = mpsc::channel(256);
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
         let first = launch(&cfg, &inner, &events_tx);
         let task = tokio::spawn(run(cfg, inner.clone(), events_tx, first));
         (Supervisor { inner, task: tokio::sync::Mutex::new(Some(task)) }, events_rx)
     }
 
-    /// Send a request; resolves when the matching response arrives.
+    /// Send a request; resolves when the matching response arrives. Dropping the future
+    /// removes the pending entry. There is no timeout of its own: callers of
+    /// `initialize` / `session/new` should wrap it in `tokio::time::timeout`.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
         let (otx, orx) = oneshot::channel();
+        let guard;
         {
             let mut st = self.inner.state.lock().unwrap();
             if st.closed {
@@ -99,12 +110,14 @@ impl Supervisor {
             let id = st.next_id;
             st.next_id += 1;
             st.pending.insert(id, otx);
+            guard = Some(PendingGuard { inner: self.inner.clone(), id });
             if tx.send(acp::encode_request(id, method, params)).is_err() {
-                st.pending.remove(&id);
                 return Err(AcpError::Exited);
             }
         }
-        orx.await.unwrap_or(Err(AcpError::Exited))
+        let r = orx.await.unwrap_or(Err(AcpError::Exited));
+        drop(guard);
+        r
     }
 
     /// Fire-and-forget notification (e.g. `session/cancel`). Dropped if no process is running.
@@ -113,8 +126,13 @@ impl Supervisor {
     }
 
     /// Answer a request the agent sent us (`AgentEvent::Request`).
-    pub fn respond(&self, id: u64, result: Result<Value, Value>) {
+    pub fn respond(&self, id: Value, result: Result<Value, Value>) {
         self.send_line(acp::encode_response(id, result));
+    }
+
+    #[doc(hidden)]
+    pub fn pending_len(&self) -> usize {
+        self.inner.state.lock().unwrap().pending.len()
     }
 
     fn send_line(&self, line: String) {
@@ -137,6 +155,27 @@ impl Supervisor {
             let _ = t.await;
         }
     }
+}
+
+struct PendingGuard {
+    inner: Arc<Inner>,
+    id: u64,
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        self.inner.state.lock().unwrap().pending.remove(&self.id);
+    }
+}
+
+/// Send a lifecycle event unless shutdown has begun (checked under the state lock).
+fn emit(inner: &Inner, events: &EventTx, ev: AgentEvent) -> bool {
+    let st = inner.state.lock().unwrap();
+    if st.closed {
+        return false;
+    }
+    let _ = events.send(ev);
+    true
 }
 
 impl Drop for Supervisor {
@@ -184,7 +223,7 @@ impl Running {
 
 /// Spawn the child and its I/O tasks, and publish its line sink so requests can be sent
 /// immediately. Synchronous so `Supervisor::start` can have a live process on return.
-fn launch(cfg: &AgentConfig, inner: &Arc<Inner>, events: &mpsc::Sender<AgentEvent>) -> Option<Running> {
+fn launch(cfg: &AgentConfig, inner: &Arc<Inner>, events: &EventTx) -> Option<Running> {
     let mut child = match spawn_child(cfg) {
         Ok(c) => c,
         Err(e) => {
@@ -205,7 +244,7 @@ fn launch(cfg: &AgentConfig, inner: &Arc<Inner>, events: &mpsc::Sender<AgentEven
     Some(Running { child, writer, drain, reader })
 }
 
-async fn run(cfg: AgentConfig, inner: Arc<Inner>, events: mpsc::Sender<AgentEvent>, first: Option<Running>) {
+async fn run(cfg: AgentConfig, inner: Arc<Inner>, events: EventTx, first: Option<Running>) {
     let mut crashes: Vec<Instant> = Vec::new();
     let mut restarts: u32 = 0;
     let mut first = Some(first);
@@ -225,7 +264,11 @@ async fn run(cfg: AgentConfig, inner: Arc<Inner>, events: mpsc::Sender<AgentEven
             None => None,
             Some(mut r) => {
                 if restarts > 0 {
-                    let _ = events.send(AgentEvent::Restarted { attempt: restarts }).await;
+                    if !emit(&inner, &events, AgentEvent::Restarted { attempt: restarts }) {
+                        let _ = r.child.kill().await;
+                        r.abort_tasks();
+                        return;
+                    }
                 }
                 let status = tokio::select! {
                     s = r.child.wait() => s,
@@ -244,14 +287,19 @@ async fn run(cfg: AgentConfig, inner: Arc<Inner>, events: mpsc::Sender<AgentEven
                 status.ok().and_then(|s| s.code())
             }
         };
+        if is_closed(&inner) {
+            return;
+        }
         inner.state.lock().unwrap().fail_all(AcpError::Exited);
-        let _ = events.send(AgentEvent::Exited { code }).await;
+        if !emit(&inner, &events, AgentEvent::Exited { code }) {
+            return;
+        }
 
         let now = Instant::now();
         crashes.push(now);
         crashes.retain(|t| now.duration_since(*t) <= cfg.crash_window);
         if crashes.len() as u32 >= cfg.max_crashes_in_window {
-            let _ = events.send(AgentEvent::GaveUp).await;
+            emit(&inner, &events, AgentEvent::GaveUp);
             return;
         }
         let delay = cfg
@@ -275,7 +323,7 @@ async fn write_loop(mut stdin: tokio::process::ChildStdin, mut rx: mpsc::Unbound
     }
 }
 
-async fn read_loop(stdout: tokio::process::ChildStdout, inner: Arc<Inner>, events: mpsc::Sender<AgentEvent>) {
+async fn read_loop(stdout: tokio::process::ChildStdout, inner: Arc<Inner>, events: EventTx) {
     // read_until has no line-length cap, so very long lines are fine.
     let mut reader = BufReader::with_capacity(64 * 1024, stdout);
     let mut buf = Vec::new();
@@ -297,7 +345,7 @@ async fn read_loop(stdout: tokio::process::ChildStdout, inner: Arc<Inner>, event
         }
         match acp::parse_line(text) {
             Err(e) => {
-                let head: String = text.chars().take(120).collect();
+                let head: String = text.chars().take(200).collect();
                 eprintln!("agent line skipped ({e}): {head}");
             }
             Ok(Incoming::Response { id, result }) => {
@@ -314,13 +362,11 @@ async fn read_loop(stdout: tokio::process::ChildStdout, inner: Arc<Inner>, event
                         .unwrap_or_default()
                         .to_string();
                     let update = params.get("update").cloned().unwrap_or(Value::Null);
-                    if events.send(AgentEvent::Update { session_id, update }).await.is_err() {
-                        // receiver dropped; keep draining so responses still route
-                    }
+                    let _ = events.send(AgentEvent::Update { session_id, update });
                 }
             }
             Ok(Incoming::Request { id, method, params }) => {
-                let _ = events.send(AgentEvent::Request { id, method, params }).await;
+                let _ = events.send(AgentEvent::Request { id, method, params });
             }
         }
     }

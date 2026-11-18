@@ -1,7 +1,7 @@
+use ide_host::supervisor::EventRx;
 use ide_host::{AcpError, AgentConfig, AgentEvent, Supervisor};
 use serde_json::json;
 use std::time::Duration;
-use tokio::sync::mpsc::Receiver;
 use tokio::time::timeout;
 
 fn cfg(mode: &str) -> AgentConfig {
@@ -15,7 +15,7 @@ fn cfg(mode: &str) -> AgentConfig {
     }
 }
 
-async fn next(rx: &mut Receiver<AgentEvent>) -> AgentEvent {
+async fn next(rx: &mut EventRx) -> AgentEvent {
     timeout(Duration::from_secs(10), rx.recv())
         .await
         .expect("timed out waiting for event")
@@ -41,7 +41,7 @@ async fn forwards_agent_requests_as_events() {
     let req = tokio::spawn(async move { s2.request("session/prompt", json!({})).await });
     match next(&mut rx).await {
         AgentEvent::Request { id, method, params } => {
-            assert_eq!(id, 1000);
+            assert_eq!(id, json!(1000));
             assert_eq!(method, "fs/read_text_file");
             assert_eq!(params, json!({"path":"a.txt"}));
             sup.respond(id, Ok(json!({"content":"hi"})));
@@ -116,4 +116,75 @@ async fn shutdown_ends_stream_without_gave_up() {
     sup.shutdown().await;
     assert!(timeout(Duration::from_secs(5), rx.recv()).await.unwrap().is_none());
     assert_eq!(sup.request("m", json!(0)).await, Err(AcpError::Closed));
+}
+
+#[tokio::test]
+async fn response_routed_while_consumer_not_draining() {
+    let (sup, mut rx) = Supervisor::start(cfg("echo,flood=1000"));
+    let r = timeout(Duration::from_secs(2), sup.request("m", json!(5)))
+        .await
+        .expect("request deadlocked");
+    assert_eq!(r.unwrap(), json!({"echo":5}));
+    let mut n = 0;
+    while n < 1000 {
+        if let AgentEvent::Update { .. } = next(&mut rx).await {
+            n += 1;
+        }
+    }
+    sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_completes_while_consumer_not_draining() {
+    let (sup, _rx) = Supervisor::start(cfg("echo,flood=1000,exit-after=200"));
+    sup.request("m", json!(1)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await; // exits + restarts, events pile up
+    timeout(Duration::from_secs(5), sup.shutdown()).await.expect("shutdown hung");
+}
+
+#[tokio::test]
+async fn dropped_request_removes_pending_entry() {
+    let (sup, _rx) = Supervisor::start(cfg("silent"));
+    let r = timeout(Duration::from_millis(200), sup.request("m", json!({}))).await;
+    assert!(r.is_err());
+    assert_eq!(sup.pending_len(), 0);
+    sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn string_id_agent_request_is_forwarded_and_answered() {
+    let (sup, mut rx) = Supervisor::start(cfg("askstr"));
+    let sup = std::sync::Arc::new(sup);
+    let s2 = sup.clone();
+    let req = tokio::spawn(async move { s2.request("session/prompt", json!({})).await });
+    match next(&mut rx).await {
+        AgentEvent::Request { id, method, .. } => {
+            assert_eq!(id, json!("abc"));
+            assert_eq!(method, "fs/read_text_file");
+            sup.respond(id, Ok(json!({"content":"hi"})));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // the mock only answers our request once it saw the response carrying id "abc"
+    assert_eq!(req.await.unwrap().unwrap(), json!({"asked":true}));
+    sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn no_lifecycle_events_after_shutdown() {
+    // shutdown while running (mock exits at 100ms, shutdown at ~50ms)
+    let (sup, mut rx) = Supervisor::start(cfg("exit-after=100"));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    sup.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    if let Ok(Some(ev)) = timeout(Duration::from_secs(2), rx.recv()).await {
+        panic!("event after shutdown: {ev:?}");
+    }
+    // shutdown during backoff
+    let mut c = cfg("crash");
+    c.backoff = vec![Duration::from_secs(30)];
+    let (sup, mut rx) = Supervisor::start(c);
+    assert!(matches!(next(&mut rx).await, AgentEvent::Exited { .. }));
+    sup.shutdown().await;
+    assert!(timeout(Duration::from_secs(2), rx.recv()).await.unwrap().is_none());
 }

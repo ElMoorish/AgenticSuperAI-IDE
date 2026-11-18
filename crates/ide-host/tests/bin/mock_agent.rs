@@ -46,7 +46,28 @@ fn main() {
         let id: String = field_after(&line, "\"id\":")
             .map(|r| r.chars().take_while(|c| c.is_ascii_digit()).collect())
             .unwrap_or_default();
-        if has("ask") {
+        if let Some(n) = mode.split(',').find_map(|m| m.strip_prefix("flood=")) {
+            let n: usize = n.parse().unwrap_or(0);
+            let mut o = stdout.lock();
+            for i in 0..n {
+                writeln!(o, r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s1","update":{{"i":{i}}}}}}}"#).unwrap();
+            }
+            o.flush().unwrap();
+        }
+        if has("askstr") {
+            let mut o = stdout.lock();
+            writeln!(o, r#"{{"jsonrpc":"2.0","id":"abc","method":"fs/read_text_file","params":{{"path":"a.txt"}}}}"#).unwrap();
+            o.flush().unwrap();
+            drop(o);
+            while let Some(Ok(l)) = lines.next() {
+                if l.contains("\"id\":\"abc\"") && !l.contains("\"method\"") {
+                    break;
+                }
+            }
+            let mut o = stdout.lock();
+            writeln!(o, r#"{{"jsonrpc":"2.0","id":{id},"result":{{"asked":true}}}}"#).unwrap();
+            o.flush().unwrap();
+        } else if has("ask") {
             let mut o = stdout.lock();
             writeln!(o, r#"{{"jsonrpc":"2.0","id":1000,"method":"fs/read_text_file","params":{{"path":"a.txt"}}}}"#).unwrap();
             o.flush().unwrap();
