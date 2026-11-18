@@ -14,10 +14,12 @@ test = false
 
 [dependencies]
 dunce = "1"
+notify = "8"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["process", "io-util", "io-std", "sync", "time", "rt-multi-thread", "macros"] }
+ureq = { version = "2", features = ["json"] }
 
 [dev-dependencies]
 tempfile = "3"

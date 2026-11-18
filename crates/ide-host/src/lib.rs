@@ -8,3 +8,6 @@ pub mod workspace;
 pub use acp::{AcpError, AgentEvent};
 pub use supervisor::{AgentConfig, Supervisor};
 pub use workspace::{FsError, Workspace};
+pub mod probe;
+pub mod settings;
+pub mod watcher;
