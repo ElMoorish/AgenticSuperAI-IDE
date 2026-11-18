@@ -5,7 +5,7 @@
 //! JS argument names are camelCase (`onEvent`, `onOutput`); errors arrive as `{code, message}`.
 
 use crate::state::{
-    AppError, AppState, DetectedDto, DirEntryDto, ProbeDto, ReadFileResult, StampDto, UiEvent, WorkspaceInfo,
+    parse_settings_input, AppError, AppState, DetectedDto, DirEntryDto, ProbeDto, ReadFileResult, StampDto, UiEvent, WorkspaceInfo,
 };
 use ide_host::settings::Settings;
 use std::sync::Arc;
@@ -70,7 +70,7 @@ pub async fn save_file(state: S<'_>, rel: String, text: String, stamp: StampDto)
 /// Register the webview listener for all UI events without starting a turn.
 #[tauri::command]
 pub fn subscribe_events(state: S<'_>, on_event: Channel<UiEvent>) {
-    state.set_sink(Arc::new(channel_sink(on_event)));
+    state.subscribe(Arc::new(channel_sink(on_event)));
 }
 
 /// Run a turn. `on_event` replaces the current listener (same stream as `subscribe_events`).
@@ -112,8 +112,8 @@ pub fn get_settings(state: S<'_>) -> Settings {
 }
 
 #[tauri::command]
-pub async fn set_settings(state: S<'_>, settings: Settings) -> Result<Settings, AppError> {
-    state.set_settings(settings).await
+pub async fn set_settings(state: S<'_>, settings: serde_json::Value) -> Result<Settings, AppError> {
+    state.set_settings(parse_settings_input(settings)?).await
 }
 
 #[tauri::command]
@@ -123,7 +123,9 @@ pub async fn start_user_terminal(
     cols: u16,
     on_output: Channel<Vec<u8>>,
 ) -> Result<u64, AppError> {
-    state.start_user_terminal(rows, cols, Box::new(move |b: Vec<u8>| on_output.send(b).is_ok()))
+    state
+        .start_user_terminal(rows, cols, Box::new(move |b: Vec<u8>| on_output.send(b).is_ok()))
+        .await
 }
 
 #[tauri::command]

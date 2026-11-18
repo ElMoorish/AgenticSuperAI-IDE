@@ -128,12 +128,46 @@ pub fn write_atomic_hooked(
     fail_after_temp: bool,
     before_rename: Option<&dyn Fn()>,
 ) -> Result<FileStamp, WriteError> {
+    write_inner(ws, p, text, expected, fail_after_temp, before_rename, false)
+}
+
+/// Create `p` only if it does not exist: `Conflict` if the file exists (now, or appears
+/// before the final step). Same atomic temp-file write otherwise. On NTFS the final step is
+/// a hard link (fails if the target exists), so a concurrent creator cannot be overwritten;
+/// filesystems without hard links fall back to an exists-check followed by a rename.
+pub fn write_atomic_create_new(ws: &Workspace, p: &str, text: &str) -> Result<FileStamp, WriteError> {
+    write_inner(ws, p, text, None, false, None, true)
+}
+
+/// Test hook: `before_rename` runs after the temp file is written, before the final step.
+#[doc(hidden)]
+pub fn write_atomic_create_new_hooked(
+    ws: &Workspace,
+    p: &str,
+    text: &str,
+    before_rename: Option<&dyn Fn()>,
+) -> Result<FileStamp, WriteError> {
+    write_inner(ws, p, text, None, false, before_rename, true)
+}
+
+fn write_inner(
+    ws: &Workspace,
+    p: &str,
+    text: &str,
+    expected: Option<&FileStamp>,
+    fail_after_temp: bool,
+    before_rename: Option<&dyn Fn()>,
+    create_only: bool,
+) -> Result<FileStamp, WriteError> {
     let abs = ws.resolve(p)?;
     let existing = match fs::read(&abs) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(io_err(e, &abs).into()),
     };
+    if create_only && existing.is_some() {
+        return Err(WriteError::Conflict);
+    }
     match (&existing, expected) {
         (Some(b), Some(exp)) if content_hash(b) != exp.hash => return Err(WriteError::Conflict),
         (None, Some(_)) => return Err(WriteError::Conflict),
@@ -197,7 +231,25 @@ pub fn write_atomic_hooked(
                 Err(e) => return Err(io_err(e, &abs).into()),
             }
         }
-        fs::rename(&tmp, &abs).map_err(|e| io_err(e, &abs))?;
+        if create_only {
+            match fs::hard_link(&tmp, &abs) {
+                Ok(()) => {
+                    let _ = fs::remove_file(&tmp);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(WriteError::Conflict)
+                }
+                Err(_) => {
+                    // no hard links on this filesystem: best-effort check, then rename
+                    if abs.exists() {
+                        return Err(WriteError::Conflict);
+                    }
+                    fs::rename(&tmp, &abs).map_err(|e| io_err(e, &abs))?;
+                }
+            }
+        } else {
+            fs::rename(&tmp, &abs).map_err(|e| io_err(e, &abs))?;
+        }
         Ok(())
     })();
     if let Err(e) = result {

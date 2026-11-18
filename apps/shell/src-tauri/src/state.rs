@@ -10,7 +10,7 @@
 
 use ide_host::acp::AgentEvent;
 use ide_host::editor::{BufferView, EditorHandler, HandlerOutcome, PendingCommand, PendingEdit};
-use ide_host::files::{read_stamped, write_atomic, FileStamp, WriteError};
+use ide_host::files::{read_stamped, write_atomic, write_atomic_create_new, FileStamp, WriteError};
 use ide_host::probe::{self, DetectedServer, ProbeResult};
 use ide_host::settings::Settings;
 use ide_host::supervisor::{AgentConfig, EventRx};
@@ -32,8 +32,8 @@ use tokio::task::JoinHandle;
 /// Event coalescing window and per-batch byte cap (plan: 16 ms / 64 KB).
 pub const BATCH_INTERVAL: Duration = Duration::from_millis(16);
 pub const BATCH_BYTES: usize = 64 * 1024;
-/// Files above this size are refused by `read_file` (the UI also caps at 5 MB).
-pub const MAX_READ_BYTES: u64 = 50 * 1024 * 1024;
+/// Files above this size are refused by `read_file` (the UI opens up to 5 MB).
+pub const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_DIR_ENTRIES: usize = 20_000;
 const MAX_USER_TERMINALS: usize = 8;
 const GPU_INTERVAL: Duration = Duration::from_secs(2);
@@ -44,7 +44,7 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Error returned to the webview as `{code, message}`.
 ///
 /// Codes: `no_workspace`, `escapes`, `not_found`, `io`, `conflict`, `too_large`,
-/// `bad_request`, `busy`, `agent_missing`, `agent`, `unknown_approval`, `terminal`.
+/// `binary` (not UTF-8), `bad_request`, `busy`, `agent_missing`, `agent`, `unknown_approval`, `terminal`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AppError {
     pub code: String,
@@ -295,21 +295,76 @@ impl Coalescer {
 
 /// Delivers one event to the webview; returns false when the listener is gone.
 pub type Sink = Arc<dyn Fn(&UiEvent) -> bool + Send + Sync>;
-pub type SinkSlot = Arc<Mutex<Option<Sink>>>;
 
-fn flush(co: &mut Coalescer, slot: &SinkSlot) {
-    let batches = co.take();
-    let sink = slot.lock().unwrap().clone();
-    let Some(sink) = sink else { return }; // no window listening: drop
-    for ev in batches.iter().flatten() {
-        if !sink(ev) {
-            // listener closed: forget it (unless replaced meanwhile)
-            let mut g = slot.lock().unwrap();
-            if g.as_ref().is_some_and(|cur| Arc::ptr_eq(cur, &sink)) {
-                *g = None;
-            }
-            return;
+#[derive(Default)]
+struct Missed {
+    /// Latest agent state seen (delivered or not): replayed to every new listener.
+    agent_state: Option<String>,
+    /// A `TurnEnd` that nobody received: replayed once.
+    turn_end: Option<String>,
+}
+
+/// The single webview listener plus what a late listener must be told.
+#[derive(Default)]
+pub struct SinkHub {
+    sink: Mutex<Option<Sink>>,
+    missed: Mutex<Missed>,
+}
+
+impl SinkHub {
+    pub fn set(&self, s: Option<Sink>) {
+        *self.sink.lock().unwrap() = s;
+    }
+    pub fn get(&self) -> Option<Sink> {
+        self.sink.lock().unwrap().clone()
+    }
+    pub fn is_set(&self) -> bool {
+        self.sink.lock().unwrap().is_some()
+    }
+    fn clear_if(&self, s: &Sink) {
+        let mut g = self.sink.lock().unwrap();
+        if g.as_ref().is_some_and(|cur| Arc::ptr_eq(cur, s)) {
+            *g = None;
         }
+    }
+    fn note(&self, ev: &UiEvent) {
+        if let UiEvent::AgentState { state } = ev {
+            self.missed.lock().unwrap().agent_state = Some(state.clone());
+        }
+    }
+    fn note_missed(&self, ev: &UiEvent) {
+        if let UiEvent::TurnEnd { stop_reason } = ev {
+            self.missed.lock().unwrap().turn_end = Some(stop_reason.clone());
+        }
+    }
+    fn forget_missed_turn_end(&self) {
+        self.missed.lock().unwrap().turn_end = None;
+    }
+    /// (latest agent state, undelivered turn end - taken)
+    fn take_replay(&self) -> (Option<String>, Option<String>) {
+        let mut m = self.missed.lock().unwrap();
+        (m.agent_state.clone(), m.turn_end.take())
+    }
+}
+
+pub type SinkSlot = Arc<SinkHub>;
+
+fn flush(co: &mut Coalescer, hub: &SinkSlot) {
+    let batches = co.take();
+    let sink = hub.get();
+    let mut dead = sink.is_none(); // no window listening: events are dropped, but remembered
+    for ev in batches.iter().flatten() {
+        hub.note(ev);
+        if !dead {
+            if sink.as_ref().is_some_and(|s| s(ev)) {
+                continue;
+            }
+            dead = true; // listener closed: forget it (unless replaced meanwhile)
+            if let Some(s) = &sink {
+                hub.clear_if(s);
+            }
+        }
+        hub.note_missed(ev);
     }
 }
 
@@ -421,13 +476,19 @@ fn rel_string(root: &Path, abs: &Path) -> String {
         .join("/")
 }
 
-/// Find the agent binary: `ASA_AGENT_EXE` override, then next to the app exe (installed
-/// sidecar), then `target/{debug,release}/agent-core.exe` of any ancestor (dev builds).
+/// Find the agent binary: `ASA_AGENT_EXE` override (honoured in every build, logged), then
+/// next to the app exe (installed sidecar), then - debug builds only - `target/{debug,release}`
+/// of any ancestor directory.
 pub fn locate_agent_exe(current_exe: &Path, env_override: Option<&str>) -> Option<PathBuf> {
+    locate_agent_exe_with(current_exe, env_override, cfg!(debug_assertions))
+}
+
+pub fn locate_agent_exe_with(current_exe: &Path, env_override: Option<&str>, dev_fallback: bool) -> Option<PathBuf> {
     let name = format!("agent-core{}", std::env::consts::EXE_SUFFIX);
     if let Some(o) = env_override.filter(|s| !s.trim().is_empty()) {
         let p = PathBuf::from(o);
         if p.is_file() {
+            eprintln!("warning: using agent executable from ASA_AGENT_EXE: {}", p.display());
             return Some(p);
         }
     }
@@ -436,11 +497,13 @@ pub fn locate_agent_exe(current_exe: &Path, env_override: Option<&str>) -> Optio
     if sibling.is_file() {
         return Some(sibling);
     }
-    for anc in dir.ancestors() {
-        for profile in ["debug", "release"] {
-            let c = anc.join("target").join(profile).join(&name);
-            if c.is_file() {
-                return Some(c);
+    if dev_fallback {
+        for anc in dir.ancestors() {
+            for profile in ["debug", "release"] {
+                let c = anc.join("target").join(profile).join(&name);
+                if c.is_file() {
+                    return Some(c);
+                }
             }
         }
     }
@@ -474,6 +537,17 @@ pub fn map_update(update: &Value) -> Option<UiEvent> {
         }),
         _ => None,
     }
+}
+
+/// Parse settings coming from the webview, rejecting unknown keys (so a camelCase
+/// `fontSize` typo is an error instead of being silently ignored).
+pub fn parse_settings_input(v: Value) -> Result<Settings, AppError> {
+    const KEYS: [&str; 6] = ["endpoint", "model", "ignore", "theme", "font_size", "recent"];
+    let obj = v.as_object().ok_or_else(|| AppError::bad_request("settings must be an object"))?;
+    if let Some(k) = obj.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        return Err(AppError::bad_request(format!("unknown settings key: {k} (expected one of {KEYS:?})")));
+    }
+    serde_json::from_value(v).map_err(|e| AppError::bad_request(format!("invalid settings: {e}")))
 }
 
 fn valid_endpoint(e: &str) -> bool {
@@ -516,9 +590,62 @@ impl BufferView for NoBuffers {
     }
 }
 
-enum Pending {
+pub(crate) enum Pending {
+    /// `stamp: None` = the file did not exist: the write must be create-only.
     Edit { pe: PendingEdit, stamp: Option<FileStamp> },
     Command(PendingCommand),
+}
+
+fn approval_event(id: u64, p: &Pending) -> UiEvent {
+    match p {
+        Pending::Edit { pe, .. } => UiEvent::Approval {
+            id,
+            kind: "edit".into(),
+            title: pe.path.clone(),
+            old: Some(pe.old.clone()),
+            new: Some(pe.new.clone()),
+            command: None,
+        },
+        Pending::Command(pc) => UiEvent::Approval {
+            id,
+            kind: "command".into(),
+            title: pc.title.clone(),
+            old: None,
+            new: None,
+            command: Some(pc.command.clone()),
+        },
+    }
+}
+
+/// Kill and forget every agent terminal still registered (agent exited, restarted or shut down).
+fn release_all_terms(live: &Mutex<HashSet<u64>>, terms: &AgentTerminals) {
+    let ids: Vec<u64> = live.lock().unwrap().drain().collect();
+    for id in ids {
+        terms.release(id);
+    }
+}
+
+/// One read gives both the old text and the stamp the later write is guarded by.
+/// `Ok((String::new(), None))` = the file does not exist (create-only write).
+fn read_for_approval(ws: &Workspace, path: &str) -> Result<(String, Option<FileStamp>), AppError> {
+    let abs = ws.resolve(path)?;
+    if let Ok(md) = std::fs::metadata(&abs) {
+        if md.len() > MAX_READ_BYTES {
+            return Err(AppError::new("too_large", format!("{path} is {} bytes (limit {MAX_READ_BYTES})", md.len())));
+        }
+    }
+    match read_stamped(ws, path) {
+        Ok((t, s)) => Ok((t, Some(s))),
+        Err(FsError::NotFound(_)) => Ok((String::new(), None)),
+        Err(e) => Err(read_err(e)),
+    }
+}
+
+fn read_err(e: FsError) -> AppError {
+    match e {
+        FsError::Io(m) if m.ends_with("not valid UTF-8") => AppError::new("binary", m),
+        other => other.into(),
+    }
 }
 
 struct AgentCtx {
@@ -538,6 +665,10 @@ pub struct WsCtx {
     ws: Workspace,
     ui_tx: UnboundedSender<UiEvent>,
     pending: Mutex<HashMap<u64, Pending>>,
+    /// App-wide counter shared by every workspace: approval ids never repeat.
+    approval_ids: Arc<AtomicU64>,
+    /// Busy flag of this workspace's agent (a turn is running).
+    turn_active: Arc<AtomicBool>,
     agent: Option<Arc<AgentCtx>>,
     watcher: Mutex<Option<Watcher>>,
     watch_task: Mutex<Option<JoinHandle<()>>>,
@@ -547,6 +678,26 @@ pub struct WsCtx {
 impl WsCtx {
     fn send(&self, ev: UiEvent) {
         let _ = self.ui_tx.send(ev);
+    }
+
+    /// Store a pending approval under a fresh app-wide id and tell the UI.
+    pub(crate) fn register_approval(&self, mut p: Pending) -> u64 {
+        let id = self.approval_ids.fetch_add(1, Ordering::SeqCst);
+        match &mut p {
+            Pending::Edit { pe, .. } => pe.id = id,
+            Pending::Command(pc) => pc.id = id,
+        }
+        let ev = approval_event(id, &p);
+        self.pending.lock().unwrap().insert(id, p);
+        self.send(ev);
+        id
+    }
+
+    fn approval_events(&self) -> Vec<UiEvent> {
+        let g = self.pending.lock().unwrap();
+        let mut v: Vec<(u64, UiEvent)> = g.iter().map(|(id, p)| (*id, approval_event(*id, p))).collect();
+        v.sort_by_key(|(id, _)| *id);
+        v.into_iter().map(|(_, e)| e).collect()
     }
 
     fn start_watcher(&self, ignore: &[String]) {
@@ -573,8 +724,13 @@ impl WsCtx {
     }
 
     async fn shutdown(&self) {
-        for t in self.tasks.lock().unwrap().drain(..) {
+        let tasks: Vec<JoinHandle<()>> = self.tasks.lock().unwrap().drain(..).collect();
+        for t in &tasks {
             t.abort();
+        }
+        // wait until the futures are really dropped, so channels they own are closed
+        for t in tasks {
+            let _ = t.await;
         }
         if let Some(t) = self.watch_task.lock().unwrap().take() {
             t.abort();
@@ -582,10 +738,7 @@ impl WsCtx {
         *self.watcher.lock().unwrap() = None;
         self.pending.lock().unwrap().clear();
         if let Some(a) = &self.agent {
-            let ids: Vec<u64> = a.live_terms.lock().unwrap().drain().collect();
-            for id in ids {
-                a.terms.release(id);
-            }
+            release_all_terms(&a.live_terms, &a.terms);
             a.sup.shutdown().await;
         }
     }
@@ -602,15 +755,21 @@ impl WsCtx {
             AgentEvent::Request { id, method, params } => self.on_request(agent, id, method, params),
             AgentEvent::Exited { .. } => {
                 agent.epoch.fetch_add(1, Ordering::SeqCst);
+                release_all_terms(&agent.live_terms, &agent.terms);
                 self.pending.lock().unwrap().clear();
                 self.send(UiEvent::AgentState { state: "crashed".into() });
             }
             AgentEvent::Restarted { .. } => {
                 agent.epoch.fetch_add(1, Ordering::SeqCst);
+                release_all_terms(&agent.live_terms, &agent.terms);
                 self.pending.lock().unwrap().clear();
                 self.send(UiEvent::AgentState { state: "restarted".into() });
             }
-            AgentEvent::GaveUp => self.send(UiEvent::AgentState { state: "gave_up".into() }),
+            AgentEvent::GaveUp => {
+                release_all_terms(&agent.live_terms, &agent.terms);
+                self.pending.lock().unwrap().clear();
+                self.send(UiEvent::AgentState { state: "gave_up".into() });
+            }
         }
     }
 
@@ -628,30 +787,25 @@ impl WsCtx {
             match out {
                 Ok(HandlerOutcome::Reply(v)) => agent.sup.respond(id, Ok(v)),
                 Ok(HandlerOutcome::Error(e)) => agent.sup.respond(id, Err(e)),
-                Ok(HandlerOutcome::NeedsApproval(pe)) => {
-                    let stamp = read_stamped(&this.ws, &pe.path).ok().map(|(_, s)| s);
-                    let ev = UiEvent::Approval {
-                        id: pe.id,
-                        kind: "edit".into(),
-                        title: pe.path.clone(),
-                        old: Some(pe.old.clone()),
-                        new: Some(pe.new.clone()),
-                        command: None,
-                    };
-                    this.pending.lock().unwrap().insert(pe.id, Pending::Edit { pe, stamp });
-                    this.send(ev);
+                Ok(HandlerOutcome::NeedsApproval(mut pe)) => {
+                    // one blocking read (size-capped) yields both the old text and the stamp
+                    let (ws, path) = (this.ws.clone(), pe.path.clone());
+                    match tokio::task::spawn_blocking(move || read_for_approval(&ws, &path)).await {
+                        Ok(Ok((old, stamp))) => {
+                            pe.old = old;
+                            this.register_approval(Pending::Edit { pe, stamp });
+                        }
+                        Ok(Err(e)) => agent
+                            .sup
+                            .respond(pe.agent_id, Err(json!({"code": -32000, "message": e.message}))),
+                        Err(e) => agent.sup.respond(
+                            pe.agent_id,
+                            Err(json!({"code": -32603, "message": format!("internal error: {e}")})),
+                        ),
+                    }
                 }
                 Ok(HandlerOutcome::NeedsPermission(pc)) => {
-                    let ev = UiEvent::Approval {
-                        id: pc.id,
-                        kind: "command".into(),
-                        title: pc.title.clone(),
-                        old: None,
-                        new: None,
-                        command: Some(pc.command.clone()),
-                    };
-                    this.pending.lock().unwrap().insert(pc.id, Pending::Command(pc));
-                    this.send(ev);
+                    this.register_approval(Pending::Command(pc));
                 }
                 Err(e) => agent.sup.respond(
                     id,
@@ -790,7 +944,7 @@ pub struct AppState {
     sink: SinkSlot,
     inner: Mutex<Inner>,
     open_lock: tokio::sync::Mutex<()>,
-    turn_active: Arc<AtomicBool>,
+    approval_ids: Arc<AtomicU64>,
     terms: Arc<Mutex<HashMap<u64, Arc<UserPty>>>>,
     next_term: AtomicU64,
 }
@@ -804,10 +958,10 @@ impl AppState {
             agent_exe,
             ui_tx,
             ui_rx: Mutex::new(Some(ui_rx)),
-            sink: Arc::new(Mutex::new(None)),
+            sink: Arc::new(SinkHub::default()),
             inner: Mutex::new(Inner { ws: None, settings }),
             open_lock: tokio::sync::Mutex::new(()),
-            turn_active: Arc::new(AtomicBool::new(false)),
+            approval_ids: Arc::new(AtomicU64::new(1)),
             terms: Arc::new(Mutex::new(HashMap::new())),
             next_term: AtomicU64::new(1),
         }
@@ -824,11 +978,29 @@ impl AppState {
 
     /// Install the (single) webview listener; later calls replace it.
     pub fn set_sink(&self, sink: Sink) {
-        *self.sink.lock().unwrap() = Some(sink);
+        self.sink.set(Some(sink));
+    }
+
+    /// Install the listener and replay what it may have missed: the latest agent state,
+    /// a turn end nobody received, and every still-pending approval.
+    pub fn subscribe(&self, sink: Sink) {
+        self.set_sink(sink);
+        let (state, turn_end) = self.sink.take_replay();
+        if let Some(state) = state {
+            self.emit(UiEvent::AgentState { state });
+        }
+        if let Some(stop_reason) = turn_end {
+            self.emit(UiEvent::TurnEnd { stop_reason });
+        }
+        if let Ok(ctx) = self.ctx() {
+            for ev in ctx.approval_events() {
+                self.emit(ev);
+            }
+        }
     }
 
     pub fn has_sink(&self) -> bool {
-        self.sink.lock().unwrap().is_some()
+        self.sink.is_set()
     }
 
     pub fn emit(&self, ev: UiEvent) {
@@ -856,7 +1028,6 @@ impl AppState {
         if let Some(old) = old {
             old.shutdown().await;
         }
-        self.turn_active.store(false, Ordering::SeqCst);
         let settings = self.inner.lock().unwrap().settings.clone();
 
         let (ordered_tx, mut ordered_rx) = mpsc::unbounded_channel::<UiEvent>();
@@ -889,6 +1060,8 @@ impl AppState {
             ws: ws.clone(),
             ui_tx: self.ui_tx.clone(),
             pending: Mutex::new(HashMap::new()),
+            approval_ids: self.approval_ids.clone(),
+            turn_active: Arc::new(AtomicBool::new(false)),
             agent: agent_parts.as_ref().map(|p| p.0.clone()),
             watcher: Mutex::new(None),
             watch_task: Mutex::new(None),
@@ -963,6 +1136,11 @@ impl AppState {
     // ---- files
 
     pub fn list_dir(&self, rel: &str) -> Result<Vec<DirEntryDto>, AppError> {
+        self.list_dir_capped(rel, MAX_DIR_ENTRIES)
+    }
+
+    /// Sorted (dirs first, then case-insensitive name) and only then truncated to `cap`.
+    pub fn list_dir_capped(&self, rel: &str, cap: usize) -> Result<Vec<DirEntryDto>, AppError> {
         let ws = self.workspace()?;
         let abs = ws.resolve(rel)?;
         let base = rel_string(ws.root(), &abs);
@@ -974,7 +1152,7 @@ impl AppState {
             }
         })?;
         let mut out: Vec<DirEntryDto> = Vec::new();
-        for ent in rd.flatten().take(MAX_DIR_ENTRIES) {
+        for ent in rd.flatten() {
             let name = ent.file_name().to_string_lossy().into_owned();
             let md = ent.metadata().ok();
             let is_dir = ent.path().is_dir();
@@ -990,6 +1168,7 @@ impl AppState {
                 .cmp(&a.is_dir)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
+        out.truncate(cap);
         Ok(out)
     }
 
@@ -1001,7 +1180,7 @@ impl AppState {
                 return Err(AppError::new("too_large", format!("{rel} is {} bytes (limit {MAX_READ_BYTES})", md.len())));
             }
         }
-        let (text, stamp) = read_stamped(&ws, rel)?;
+        let (text, stamp) = read_stamped(&ws, rel).map_err(read_err)?;
         Ok(ReadFileResult { text, stamp: (&stamp).into() })
     }
 
@@ -1023,16 +1202,21 @@ impl AppState {
         let agent = ctx.agent.clone().ok_or_else(|| {
             AppError::new("agent_missing", "agent-core executable not found (build it or set ASA_AGENT_EXE)")
         })?;
-        if self.turn_active.swap(true, Ordering::SeqCst) {
+        if ctx.turn_active.swap(true, Ordering::SeqCst) {
             return Err(AppError::new("busy", "a turn is already running"));
         }
-        let _guard = TurnGuard(self.turn_active.clone());
+        let _guard = TurnGuard(ctx.turn_active.clone());
+        self.sink.forget_missed_turn_end(); // a new turn supersedes an old unseen end
         let result = ctx.run_turn(&agent, mode, text).await;
         let stop = match &result {
             Ok(s) => s.clone(),
             Err(_) => "error".to_string(),
         };
-        let _ = agent.ordered_tx.send(UiEvent::TurnEnd { stop_reason: stop });
+        // Through the agent loop so it follows every update; if that loop is gone (workspace
+        // closed mid-turn) fall back to the app-level channel so the UI never hangs.
+        if agent.ordered_tx.send(UiEvent::TurnEnd { stop_reason: stop }).is_err() {
+            self.emit(UiEvent::TurnEnd { stop_reason: "cancelled".into() });
+        }
         result.map(|_| ())
     }
 
@@ -1051,11 +1235,11 @@ impl AppState {
     /// atomic); Task 11 replaces this with the `ApplyEdit` / `confirm_edit` round trip.
     pub async fn resolve_approval(&self, id: u64, accept: bool) -> Result<(), AppError> {
         let ctx = self.ctx()?;
-        let agent = ctx.agent.clone().ok_or_else(|| AppError::new("agent_missing", "no agent"))?;
         let item = ctx.pending.lock().unwrap().remove(&id);
         let Some(item) = item else {
             return Err(AppError::new("unknown_approval", format!("no pending approval {id}")));
         };
+        let agent = ctx.agent.clone().ok_or_else(|| AppError::new("agent_missing", "no agent"))?;
         match item {
             Pending::Command(pc) => {
                 let option = if accept { "allow" } else { "reject" };
@@ -1075,7 +1259,10 @@ impl AppState {
                 }
                 let ws = ctx.ws.clone();
                 let (path, new) = (pe.path.clone(), pe.new.clone());
-                let res = tokio::task::spawn_blocking(move || write_atomic(&ws, &path, &new, stamp.as_ref()))
+                let res = tokio::task::spawn_blocking(move || match stamp {
+                    Some(st) => write_atomic(&ws, &path, &new, Some(&st)),
+                    None => write_atomic_create_new(&ws, &path, &new),
+                })
                     .await
                     .map_err(|e| AppError::new("io", e.to_string()))?;
                 match res {
@@ -1121,12 +1308,15 @@ impl AppState {
                 ctx.start_watcher(&new.ignore);
             }
             let agent_env_changed = new.endpoint != current.endpoint || new.model != current.model;
-            if agent_env_changed && ctx.agent.is_some() && !self.turn_active.load(Ordering::SeqCst) {
+            if agent_env_changed && ctx.agent.is_some() && !ctx.turn_active.load(Ordering::SeqCst) {
                 // The agent reads its endpoint/model from the environment at spawn: restart it.
                 let _g = self.open_lock.lock().await;
                 let root = ctx.ws.root().to_string_lossy().into_owned();
                 drop(ctx);
-                let _ = self.open_inner(&root).await;
+                if let Err(e) = self.open_inner(&root).await {
+                    eprintln!("agent restart after settings change failed: {e}");
+                    self.emit(UiEvent::AgentState { state: "crashed".into() });
+                }
             }
         }
         Ok(new)
@@ -1152,7 +1342,7 @@ impl AppState {
 
     /// Start the user's shell on a pty. `out` receives raw output bytes (return false when
     /// the listener is gone). Must be called inside the tokio runtime.
-    pub fn start_user_terminal(
+    pub async fn start_user_terminal(
         &self,
         rows: u16,
         cols: u16,
@@ -1168,7 +1358,10 @@ impl AppState {
             .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("."));
         let (tx, mut rx) = mpsc::channel::<PtyEvent>(PTY_CHANNEL_CAPACITY);
-        let pty = Arc::new(UserPty::spawn("powershell.exe", &cwd, rows, cols, tx)?);
+        let pty = tokio::task::spawn_blocking(move || UserPty::spawn("powershell.exe", &cwd, rows, cols, tx))
+            .await
+            .map_err(|e| AppError::new("terminal", e.to_string()))??;
+        let pty = Arc::new(pty);
         let id = self.next_term.fetch_add(1, Ordering::SeqCst);
         self.terms.lock().unwrap().insert(id, pty.clone());
         let terms = self.terms.clone();
@@ -1449,11 +1642,11 @@ mod tests {
         let app_dir = d.path().join("app");
         std::fs::create_dir_all(&app_dir).unwrap();
         let app = app_dir.join("shell.exe");
-        assert_eq!(locate_agent_exe(&app, None), None);
+        assert_eq!(locate_agent_exe_with(&app, None, true), None);
         let tdir = d.path().join("target/debug");
         std::fs::create_dir_all(&tdir).unwrap();
         std::fs::write(tdir.join(&name), "").unwrap();
-        assert_eq!(locate_agent_exe(&app, None), Some(tdir.join(&name)));
+        assert_eq!(locate_agent_exe_with(&app, None, true), Some(tdir.join(&name)));
         std::fs::write(app_dir.join(&name), "").unwrap();
         assert_eq!(locate_agent_exe(&app, None), Some(app_dir.join(&name)));
         let ov = d.path().join("custom.exe");
@@ -1488,20 +1681,16 @@ mod tests {
         st.open_folder(dir.path().to_str().unwrap()).await.unwrap();
         assert_eq!(st.agent_prompt("yolo", "x").await.unwrap_err().code, "bad_request");
         assert_eq!(st.agent_prompt("plan", "x").await.unwrap_err().code, "agent_missing");
-        assert_eq!(st.resolve_approval(1, true).await.unwrap_err().code, "agent_missing");
+        assert_eq!(st.resolve_approval(1, true).await.unwrap_err().code, "unknown_approval");
         st.agent_cancel(); // no agent: must not panic
     }
 
     #[tokio::test]
     async fn pump_delivers_events_in_order_and_coalesces_chunks() {
         let (tx, rx) = mpsc::unbounded_channel();
-        let slot: SinkSlot = Arc::new(Mutex::new(None));
-        let got = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
-        let g2 = got.clone();
-        *slot.lock().unwrap() = Some(Arc::new(move |e: &UiEvent| {
-            g2.lock().unwrap().push(e.clone());
-            true
-        }));
+        let slot: SinkSlot = SinkSlot::default();
+        let (sink, got) = collector();
+        slot.set(Some(sink));
         let pump = tokio::spawn(run_pump(rx, slot.clone()));
         for i in 0..100 {
             tx.send(chunk(&format!("{i},"))).unwrap();
@@ -1523,24 +1712,21 @@ mod tests {
     async fn pump_forgets_a_dead_sink() {
         let (tx, rx) = mpsc::unbounded_channel();
         let dead: Sink = Arc::new(|_: &UiEvent| false);
-        let slot: SinkSlot = Arc::new(Mutex::new(Some(dead)));
+        let slot: SinkSlot = SinkSlot::default();
+        slot.set(Some(dead));
         let pump = tokio::spawn(run_pump(rx, slot.clone()));
         tx.send(chunk("x")).unwrap();
         drop(tx);
         pump.await.unwrap();
-        assert!(slot.lock().unwrap().is_none());
+        assert!(!slot.is_set());
     }
 
     /// Drives the real agent-core binary (no model server is running, so the turn ends
     /// with an error) through open_folder -> initialize/session/new -> prompt -> TurnEnd.
-    /// Skipped when agent-core has not been built.
+    /// agent-core is built on demand (the test fails if that is impossible).
     #[tokio::test]
     async fn real_agent_turn_reports_running_and_turn_end() {
-        let me = std::env::current_exe().unwrap();
-        let Some(exe) = locate_agent_exe(&me, None) else {
-            eprintln!("skipped: agent-core not built");
-            return;
-        };
+        let exe = agent_exe_or_build();
         let dir = tempfile::tempdir().unwrap();
         let st = Arc::new(AppState::new(dir.path().join("cfg"), Some(exe)));
         // unreachable model endpoint on a closed port
@@ -1567,6 +1753,251 @@ mod tests {
         // the busy flag was released: a second prompt is not refused as busy
         let r2 = st.agent_prompt("plan", "again").await;
         assert_ne!(r2.err().map(|e| e.code), Some("busy".to_string()));
+        st.shutdown().await;
+    }
+
+    // ------------------------------------------------------------ fix round 1
+
+    fn collector() -> (Sink, Arc<Mutex<Vec<UiEvent>>>) {
+        let got = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
+        let g2 = got.clone();
+        let sink: Sink = Arc::new(move |e: &UiEvent| {
+            g2.lock().unwrap().push(e.clone());
+            true
+        });
+        (sink, got)
+    }
+
+    fn cmd_approval() -> Pending {
+        Pending::Command(PendingCommand { id: 0, agent_id: json!(7), title: "run".into(), command: "cargo test".into() })
+    }
+
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+
+    async fn state_with_pump(dir: &Path) -> (Arc<AppState>, tempfile::TempDir) {
+        let cfg = tempfile::tempdir().unwrap();
+        let st = Arc::new(AppState::new(cfg.path().to_path_buf(), None));
+        tokio::spawn(run_pump(st.take_event_rx().unwrap(), st.sink_slot()));
+        st.open_folder(dir.to_str().unwrap()).await.unwrap();
+        (st, cfg)
+    }
+
+    #[tokio::test]
+    async fn pending_approvals_are_replayed_on_subscribe_until_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, _cfg) = state_with_pump(dir.path()).await;
+        let id = st.ctx().unwrap().register_approval(cmd_approval());
+        settle().await; // emitted while nobody listens: dropped by the pump
+        let (sink, got) = collector();
+        st.subscribe(sink);
+        settle().await;
+        let want = UiEvent::Approval {
+            id, kind: "command".into(), title: "run".into(), old: None, new: None, command: Some("cargo test".into()),
+        };
+        assert!(got.lock().unwrap().contains(&want), "{:?}", got.lock().unwrap());
+        // a listener that reconnects (window reload) sees it again
+        let (sink2, got2) = collector();
+        st.subscribe(sink2);
+        settle().await;
+        assert!(got2.lock().unwrap().contains(&want));
+        // resolved -> gone
+        let _ = st.resolve_approval(id, true).await; // no agent in this test: agent_missing, but the item is consumed
+        let (sink3, got3) = collector();
+        st.subscribe(sink3);
+        settle().await;
+        assert!(!got3.lock().unwrap().iter().any(|e| matches!(e, UiEvent::Approval { .. })));
+    }
+
+    #[tokio::test]
+    async fn agent_state_and_missed_turn_end_are_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, _cfg) = state_with_pump(dir.path()).await;
+        let ctx = st.ctx().unwrap();
+        ctx.send(UiEvent::AgentState { state: "crashed".into() });
+        ctx.send(UiEvent::TurnEnd { stop_reason: "error".into() });
+        settle().await;
+        let (sink, got) = collector();
+        st.subscribe(sink);
+        settle().await;
+        let evs = got.lock().unwrap().clone();
+        assert!(evs.contains(&UiEvent::AgentState { state: "crashed".into() }), "{evs:?}");
+        assert!(evs.contains(&UiEvent::TurnEnd { stop_reason: "error".into() }), "{evs:?}");
+        let (sink2, got2) = collector();
+        st.subscribe(sink2);
+        settle().await;
+        let evs2 = got2.lock().unwrap().clone();
+        assert!(evs2.contains(&UiEvent::AgentState { state: "crashed".into() }));
+        assert!(!evs2.iter().any(|e| matches!(e, UiEvent::TurnEnd { .. })), "turn end replays once: {evs2:?}");
+    }
+
+    #[tokio::test]
+    async fn approval_ids_are_unique_across_workspaces_and_stale_ids_are_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let (st, _cfg) = state_with_pump(dir.path()).await;
+        let a = st.ctx().unwrap().register_approval(cmd_approval());
+        st.open_folder(dir.path().to_str().unwrap()).await.unwrap();
+        let b = st.ctx().unwrap().register_approval(cmd_approval());
+        assert_ne!(a, b);
+        assert_eq!(st.resolve_approval(a, true).await.unwrap_err().code, "unknown_approval");
+        assert_ne!(st.resolve_approval(b, true).await.unwrap_err().code, "unknown_approval");
+    }
+
+    #[tokio::test]
+    async fn release_all_terms_resets_the_live_terminal_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let terms = AgentTerminals::new(tx);
+        let live = Mutex::new(HashSet::new());
+        for _ in 0..3 {
+            let id = terms
+                .create("ping", &["-n".into(), "30".into(), "127.0.0.1".into()], dir.path())
+                .unwrap();
+            live.lock().unwrap().insert(id);
+        }
+        let ids: Vec<u64> = live.lock().unwrap().iter().copied().collect();
+        release_all_terms(&live, &terms);
+        assert!(live.lock().unwrap().is_empty());
+        for id in ids {
+            assert!(terms.output(id).is_err(), "terminal {id} forgotten after release");
+        }
+    }
+
+    #[test]
+    fn release_builds_do_not_scan_target_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        let name = format!("agent-core{}", std::env::consts::EXE_SUFFIX);
+        let app_dir = d.path().join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let tdir = d.path().join("target/debug");
+        std::fs::create_dir_all(&tdir).unwrap();
+        std::fs::write(tdir.join(&name), "").unwrap();
+        let app = app_dir.join("shell.exe");
+        assert_eq!(locate_agent_exe_with(&app, None, false), None, "release must not trust target/");
+        assert_eq!(locate_agent_exe_with(&app, None, true), Some(tdir.join(&name)));
+        std::fs::write(app_dir.join(&name), "").unwrap();
+        assert_eq!(locate_agent_exe_with(&app, None, false), Some(app_dir.join(&name)));
+        let ov = d.path().join("custom.exe");
+        std::fs::write(&ov, "").unwrap();
+        assert_eq!(locate_agent_exe_with(&app, ov.to_str(), false), Some(ov));
+    }
+
+    #[tokio::test]
+    async fn read_file_distinguishes_binary_and_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bin.dat"), [0xffu8, 0xfe, 0x00, 0x80]).unwrap();
+        let big = std::fs::File::create(dir.path().join("big.txt")).unwrap();
+        big.set_len(MAX_READ_BYTES + 1).unwrap();
+        drop(big);
+        let (st, _cfg) = state_with_pump(dir.path()).await;
+        assert_eq!(st.read_file("bin.dat").unwrap_err().code, "binary");
+        assert_eq!(st.read_file("big.txt").unwrap_err().code, "too_large");
+        assert_eq!(MAX_READ_BYTES, 10 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn list_dir_sorts_before_capping() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in ["z.txt", "a.txt", "m.txt", "b.txt"] {
+            std::fs::write(dir.path().join(n), "").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("zdir")).unwrap();
+        let (st, _cfg) = state_with_pump(dir.path()).await;
+        let got: Vec<_> = st.list_dir_capped("", 3).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(got, vec!["zdir", "a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn settings_input_rejects_unknown_keys() {
+        let e = parse_settings_input(json!({"endpoint":"http://x","fontSize":14})).unwrap_err();
+        assert_eq!(e.code, "bad_request");
+        assert!(e.message.contains("fontSize"));
+        let ok = parse_settings_input(json!({"endpoint":"http://127.0.0.1:1","font_size":14})).unwrap();
+        assert_eq!(ok.font_size, 14);
+        assert_eq!(parse_settings_input(json!(5)).unwrap_err().code, "bad_request");
+    }
+
+    #[test]
+    fn read_for_approval_uses_one_read_and_flags_new_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "old").unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        let (old, stamp) = read_for_approval(&ws, "a.txt").unwrap();
+        assert_eq!(old, "old");
+        assert_eq!(stamp.unwrap().hash, ide_host::files::content_hash(b"old"));
+        let (old, stamp) = read_for_approval(&ws, "missing.txt").unwrap();
+        assert_eq!(old, "");
+        assert!(stamp.is_none(), "missing file -> create-only");
+        let big = std::fs::File::create(dir.path().join("big.txt")).unwrap();
+        big.set_len(MAX_READ_BYTES + 1).unwrap();
+        assert_eq!(read_for_approval(&ws, "big.txt").unwrap_err().code, "too_large");
+    }
+
+    /// Build agent-core if needed; fail loudly instead of skipping.
+    fn agent_exe_or_build() -> PathBuf {
+        let me = std::env::current_exe().unwrap();
+        if let Some(p) = locate_agent_exe_with(&me, None, true) {
+            return p;
+        }
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let ok = std::process::Command::new(cargo)
+            .args(["build", "-p", "agent-core"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "could not build agent-core for the integration test");
+        locate_agent_exe_with(&me, None, true).expect("agent-core.exe missing after build")
+    }
+
+    /// A model server that accepts connections and never answers, so a turn stays in flight.
+    fn hanging_model() -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut keep = Vec::new();
+            for s in l.incoming().flatten() {
+                keep.push(s);
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[tokio::test]
+    async fn no_concurrent_turns_and_reopen_mid_turn_still_delivers_turn_end() {
+        let exe = agent_exe_or_build();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+        let st = Arc::new(AppState::new(cfg.path().to_path_buf(), Some(exe)));
+        let mut s = st.get_settings();
+        s.endpoint = hanging_model();
+        st.set_settings(s).await.unwrap();
+        let (sink, got) = collector();
+        st.set_sink(sink);
+        tokio::spawn(run_pump(st.take_event_rx().unwrap(), st.sink_slot()));
+        st.open_folder(dir.path().to_str().unwrap()).await.unwrap();
+        let st2 = st.clone();
+        let first = tokio::spawn(async move { st2.agent_prompt("plan", "hi").await });
+        for _ in 0..100 {
+            if got.lock().unwrap().iter().any(|e| matches!(e, UiEvent::AgentState { state } if state == "running")) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(st.agent_prompt("plan", "again").await.unwrap_err().code, "busy");
+        // reopening mid-turn must neither allow a parallel turn on the old agent nor hang the UI
+        st.open_folder(dir.path().to_str().unwrap()).await.unwrap();
+        let r = tokio::time::timeout(Duration::from_secs(10), first).await.expect("turn hung").unwrap();
+        assert!(r.is_err());
+        settle().await;
+        let ends: Vec<_> = got
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| if let UiEvent::TurnEnd { stop_reason } = e { Some(stop_reason.clone()) } else { None })
+            .collect();
+        assert_eq!(ends, vec!["cancelled".to_string()]);
         st.shutdown().await;
     }
 }
