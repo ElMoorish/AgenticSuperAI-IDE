@@ -17,14 +17,15 @@ mod shell;
 use agent::Mode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
 fn main() {
     let prov = provider::Provider::from_env();
     let cancel = Arc::new(AtomicBool::new(false));
-    let rx = io::spawn_reader(std::io::BufReader::new(std::io::stdin()), cancel.clone());
-    let mut io = io::Io::new(rx, std::io::stdout().lock(), cancel);
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let rx = io::spawn_reader(std::io::BufReader::new(std::io::stdin()), cancel.clone(), in_flight.clone());
+    let mut io = io::Io::new(rx, std::io::stdout().lock(), cancel, in_flight);
     let mut sessions: HashMap<String, session::Session> = HashMap::new();
     let mut counter = 0u32;
 
@@ -59,8 +60,15 @@ fn main() {
                 let mode: Mode = serde_json::from_value(params["mode"].clone()).unwrap_or(Mode::Plan);
                 let text = params["prompt"].as_array().and_then(|a| a.iter().find_map(|b| b["text"].as_str())).unwrap_or("");
                 match sessions.get_mut(sid) {
-                    Some(s) => Ok(json!({"stopReason": s.prompt(&mut io, &prov, mode, text)})),
-                    None => Err((-32602, format!("unknown session {sid}"))),
+                    Some(s) => {
+                        let stop = s.prompt(&mut io, &prov, mode, text);
+                        io.end_turn();
+                        Ok(json!({"stopReason": stop}))
+                    }
+                    None => {
+                        io.end_turn();
+                        Err((-32602, format!("unknown session {sid}")))
+                    }
                 }
             }
             "session/cancel" => Ok(Value::Null),

@@ -5,19 +5,18 @@
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
 
 pub type Msg = Result<Value, String>;
 
-/// Read lines from `input` on a background thread. A `session/cancel` sets `cancel` immediately; a
-/// `session/prompt` clears it (so a stale cancel cannot kill the next turn). The channel closes at EOF.
-pub fn spawn_reader<R: BufRead + Send + 'static>(
-    mut input: R,
-    cancel: Arc<AtomicBool>,
-) -> Receiver<Msg> {
+/// Read lines from `input` on a background thread. Every `session/prompt` read bumps `in_flight` (the
+/// main loop calls `Io::end_turn` when the turn finishes). A `session/cancel` sets `cancel` only if a
+/// prompt is in flight, so a stale cancel cannot kill a later turn. The reader never clears the flag:
+/// `end_turn` does, so cancel + immediate new prompt still cancels the active turn. The channel closes at EOF.
+pub fn spawn_reader<R: BufRead + Send + 'static>(mut input: R, cancel: Arc<AtomicBool>, in_flight: Arc<AtomicUsize>) -> Receiver<Msg> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || loop {
         let mut line = String::new();
@@ -31,8 +30,14 @@ pub fn spawn_reader<R: BufRead + Send + 'static>(
         let msg: Msg = serde_json::from_str(&line).map_err(|e| e.to_string());
         if let Ok(v) = &msg {
             match v["method"].as_str() {
-                Some("session/cancel") => cancel.store(true, Ordering::SeqCst),
-                Some("session/prompt") => cancel.store(false, Ordering::SeqCst),
+                Some("session/cancel") => {
+                    if in_flight.load(Ordering::SeqCst) > 0 {
+                        cancel.store(true, Ordering::SeqCst);
+                    }
+                }
+                Some("session/prompt") => {
+                    in_flight.fetch_add(1, Ordering::SeqCst);
+                }
                 _ => {}
             }
         }
@@ -50,17 +55,12 @@ pub struct Io<W: Write> {
     /// Messages that arrived during a `call` but were not its response; the main loop sees them first.
     pending: VecDeque<Msg>,
     cancel: Arc<AtomicBool>,
+    in_flight: Arc<AtomicUsize>,
 }
 
 impl<W: Write> Io<W> {
-    pub fn new(rx: Receiver<Msg>, out: W, cancel: Arc<AtomicBool>) -> Self {
-        Self {
-            rx,
-            out,
-            next_id: 1000,
-            pending: VecDeque::new(),
-            cancel,
-        }
+    pub fn new(rx: Receiver<Msg>, out: W, cancel: Arc<AtomicBool>, in_flight: Arc<AtomicUsize>) -> Self {
+        Self { rx, out, next_id: 1000, pending: VecDeque::new(), cancel, in_flight }
     }
 
     pub fn send(&mut self, v: Value) {
@@ -74,6 +74,12 @@ impl<W: Write> Io<W> {
 
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
+    }
+
+    /// Call when a prompt turn finishes: it is no longer in flight and its cancel (if any) is consumed.
+    pub fn end_turn(&self) {
+        let _ = self.in_flight.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(1)));
+        self.cancel.store(false, Ordering::SeqCst);
     }
 
     pub fn cancel_flag(&self) -> Arc<AtomicBool> {
@@ -101,9 +107,7 @@ impl<W: Write> Io<W> {
                 }
                 Ok(other) => self.pending.push_back(other),
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("editor closed the connection".into())
-                }
+                Err(RecvTimeoutError::Disconnected) => return Err("editor closed the connection".into()),
             }
             if self.cancelled() {
                 return Err("cancelled".into());
@@ -124,15 +128,12 @@ mod tests {
         }
         std::mem::forget(tx); // keep the channel open so call() waits rather than seeing EOF
         let cancel = Arc::new(AtomicBool::new(false));
-        (Io::new(rx, Vec::new(), cancel.clone()), cancel)
+        (Io::new(rx, Vec::new(), cancel.clone(), Arc::new(AtomicUsize::new(0))), cancel)
     }
 
     #[test]
     fn call_queues_unrelated_messages() {
-        let (mut io, _) = io_with(&[
-            json!({"jsonrpc":"2.0","method":"session/prompt","id":7,"params":{}}),
-            json!({"jsonrpc":"2.0","id":1000,"result":{"ok":true}}),
-        ]);
+        let (mut io, _) = io_with(&[json!({"jsonrpc":"2.0","method":"session/prompt","id":7,"params":{}}), json!({"jsonrpc":"2.0","id":1000,"result":{"ok":true}})]);
         assert_eq!(io.call("fs/x", json!({})).unwrap(), json!({"ok":true}));
         let queued = io.read_msg().unwrap().unwrap();
         assert_eq!(queued["method"], "session/prompt");
@@ -153,33 +154,51 @@ mod tests {
             c.store(true, Ordering::SeqCst);
         });
         let t = std::time::Instant::now();
-        assert_eq!(
-            io.call("terminal/wait_for_exit", json!({})),
-            Err("cancelled".to_string())
-        );
+        assert_eq!(io.call("terminal/wait_for_exit", json!({})), Err("cancelled".to_string()));
         assert!(t.elapsed() < Duration::from_millis(400));
     }
 
-    #[test]
-    fn reader_sets_and_clears_cancel() {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let input =
-            "{\"method\":\"session/cancel\"}\n\n{\"method\":\"initialize\",\"id\":1}\nnot json\n";
-        let rx = spawn_reader(Cursor::new(input.to_string()), cancel.clone());
-        assert_eq!(rx.recv().unwrap().unwrap()["method"], "session/cancel");
-        assert!(cancel.load(Ordering::SeqCst));
-        assert_eq!(rx.recv().unwrap().unwrap()["method"], "initialize");
-        assert!(rx.recv().unwrap().is_err(), "bad JSON surfaces as an error");
-        assert!(rx.recv().is_err(), "channel closes at EOF");
+    const PROMPT_A: &str = "{\"method\":\"session/prompt\",\"id\":1}\n";
+    const CANCEL: &str = "{\"method\":\"session/cancel\"}\n";
+    const PROMPT_B: &str = "{\"method\":\"session/prompt\",\"id\":2}\n";
 
-        let rx = spawn_reader(
-            Cursor::new("{\"method\":\"session/prompt\",\"id\":2}\n".to_string()),
-            cancel.clone(),
-        );
-        rx.recv().unwrap().unwrap();
-        assert!(
-            !cancel.load(Ordering::SeqCst),
-            "a new prompt clears a stale cancel"
-        );
+    /// Reader-backed Io that has already consumed `n_msgs` messages (synchronizes with the reader thread).
+    fn reader_io(input: &str, n_msgs: usize) -> Io<Vec<u8>> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let rx = spawn_reader(Cursor::new(input.to_string()), cancel.clone(), inflight.clone());
+        let mut io = Io::new(rx, Vec::new(), cancel, inflight);
+        for _ in 0..n_msgs {
+            io.read_msg().unwrap().unwrap();
+        }
+        io
+    }
+
+    #[test]
+    fn cancel_then_immediate_new_prompt_cancels_active_turn() {
+        // Turn A is active; the client sends cancel and prompt B back-to-back before A checks the flag.
+        let io = reader_io(&format!("{PROMPT_A}{CANCEL}{PROMPT_B}"), 3);
+        assert!(io.cancelled(), "turn A still sees the cancel although prompt B was read after it");
+        io.end_turn(); // A finishes as cancelled
+        assert!(!io.cancelled(), "flag is not left set for B");
+        assert_eq!(io.in_flight.load(Ordering::SeqCst), 1, "B is in flight and runs normally");
+        io.end_turn();
+        assert_eq!(io.in_flight.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn cancel_with_no_prompt_in_flight_is_ignored() {
+        let io = reader_io(&format!("{CANCEL}{PROMPT_B}"), 2);
+        assert!(!io.cancelled(), "a stale cancel must not cancel the next prompt");
+    }
+
+    #[test]
+    fn reader_closes_at_eof_and_reports_bad_json() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = "\n{\"method\":\"initialize\",\"id\":1}\nnot json\n";
+        let rx = spawn_reader(Cursor::new(input.to_string()), cancel, Arc::new(AtomicUsize::new(0)));
+        assert_eq!(rx.recv().unwrap().unwrap()["method"], "initialize");
+        assert!(rx.recv().unwrap().is_err());
+        assert!(rx.recv().is_err());
     }
 }

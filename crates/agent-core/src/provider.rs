@@ -1,11 +1,12 @@
 //! Data-plane client for an OpenAI-compatible /v1/chat/completions (llama-server, Ollama, LM Studio),
 //! with SSE streaming and native tool calls. Lifecycle control (spawn, flags, eviction) is a separate adapter.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 fn env_num(key: &str, default: u64) -> u64 {
@@ -32,6 +33,12 @@ pub struct ToolCallOut {
     pub name: String,
     /// Raw JSON text of the arguments (may be malformed; the caller repairs it).
     pub args: String,
+}
+
+/// Worker-thread output of one request.
+enum Ev {
+    Failed(anyhow::Error),
+    Line(Result<String, String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,26 +153,48 @@ impl Provider {
             .timeout_read(Duration::from_secs(env_num("ASA_READ_TIMEOUT_S", 120)))
             .build();
         let deadline = Instant::now() + Duration::from_secs(env_num("ASA_DEADLINE_S", 300));
-        let resp = agent
-            .post(&format!("{}/v1/chat/completions", self.base))
-            .send_json(body)
-            .map_err(anyhow::Error::from)
-            .context("llama-server not reachable or rejected the request (see config/start-llama-server.ps1)")?;
+        // The request and the body reads run on a worker thread so a cancel is honored even while the
+        // server is still prefilling (no headers yet); this thread polls the channel and the cancel flag.
+        let (tx, rx) = mpsc::channel::<Ev>();
+        let url = format!("{}/v1/chat/completions", self.base);
+        std::thread::spawn(move || {
+            let resp = match agent.post(&url).send_json(body) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Ev::Failed(anyhow::Error::from(e).context("llama-server not reachable or rejected the request (see config/start-llama-server.ps1)")));
+                    return;
+                }
+            };
+            for line in BufReader::new(resp.into_reader()).lines() {
+                if tx.send(Ev::Line(line.map_err(|e| e.to_string()))).is_err() {
+                    return; // receiver gone (cancelled or finished): drop the connection
+                }
+            }
+        });
         let mut done = Completion::default();
         let mut calls: BTreeMap<usize, ToolCallOut> = BTreeMap::new();
         let mut streamed_chars = 0usize;
         let mut reported: Option<Usage> = None;
-        'stream: for line in BufReader::new(resp.into_reader()).lines() {
+        'stream: loop {
             if cancel.load(Ordering::SeqCst) {
                 done.aborted = Some("cancelled".into());
                 break;
             }
-            let line = match line {
-                Ok(l) => l,
-                Err(e) => {
+            let line = match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Ev::Failed(e)) => return Err(e),
+                Ok(Ev::Line(Ok(l))) => l,
+                Ok(Ev::Line(Err(e))) => {
                     done.aborted = Some(format!("stream error: {e}"));
                     break;
                 }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if Instant::now() > deadline {
+                        done.aborted = Some("the model took too long to answer".into());
+                        break;
+                    }
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             let Ok(deltas) = parse_sse_line(&line) else { break };
             for d in deltas {

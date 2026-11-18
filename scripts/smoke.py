@@ -5,11 +5,12 @@ permission rejection, and Plan-mode edit blocking."""
 import json, os, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Modes: cancel = slow-streaming mock; session/cancel must end the turn with stopReason "cancelled" within 500 ms.
+# Modes: cancel_prefill = mock delays response headers ~3 s (prompt prefill); cancel must still return within 500 ms.
+#        cancel = slow-streaming mock; session/cancel must end the turn with stopReason "cancelled" within 500 ms.
 #        native = agent sends `tools`, mock answers with tool_calls deltas;
 #        xml = ASA_TOOL_MODE=xml; fallback = mock rejects `tools` with HTTP 400 and the agent must retry in XML.
 if len(sys.argv) < 2:
-    for mode in ("native", "xml", "fallback", "cancel"):
+    for mode in ("native", "xml", "fallback", "cancel", "cancel_prefill"):
         print(f"=== mode: {mode}")
         if subprocess.run([sys.executable, "-I", os.path.abspath(__file__), mode]).returncode: sys.exit(1)
     print("ALL MODES PASSED"); sys.exit(0)
@@ -66,6 +67,12 @@ class H(BaseHTTPRequestHandler):
                 self.send_response(400); self.end_headers(); self.wfile.write(b'{"error":"does not support tools"}'); return
         elif MODE == "native" or "<tool_call>" not in sysmsg:
             seen["xml_prompt_with_tools"] += 1  # a request without tools whose prompt lacks the XML format
+        if MODE == "cancel_prefill":
+            time.sleep(3)  # no headers yet
+            try:
+                self.send_response(200); self.end_headers()
+            except OSError: pass
+            return
         if MODE == "cancel":
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
             try:
@@ -133,11 +140,14 @@ rpc(1, "initialize", {})
 sid = rpc(2, "session/new", {"cwd": tmp})[0]["result"]["sessionId"]
 prompt = lambda t, mode: {"sessionId": sid, "mode": mode, "prompt": [{"type": "text", "text": t}]}
 
-if MODE == "cancel":
+if MODE in ("cancel", "cancel_prefill"):
     send({"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": prompt("write a lot", "plan")})
-    while True:  # wait until the model is actually streaming
-        m = json.loads(p.stdout.readline())
-        if m.get("method") == "session/update" and m["params"]["update"]["sessionUpdate"] == "agent_message_chunk": break
+    if MODE == "cancel":
+        while True:  # wait until the model is actually streaming
+            m = json.loads(p.stdout.readline())
+            if m.get("method") == "session/update" and m["params"]["update"]["sessionUpdate"] == "agent_message_chunk": break
+    else:
+        time.sleep(0.5)  # the agent is now blocked waiting for response headers
     t0 = time.time()
     send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}})
     while True:
