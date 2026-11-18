@@ -184,7 +184,7 @@ fn gpu_parse_handles_csv_line() {
     assert_eq!(parse_gpu_csv("[N/A], 8188"), None);
 }
 
-fn serve_raw(resp: &'static str) -> u16 {
+fn serve_raw(resp: String) -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -204,18 +204,32 @@ fn serve_raw(resp: &'static str) -> u16 {
     port
 }
 
-const R302: &str = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-const RHTML: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<html>hi</html";
-const RNODATA: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+fn http(status: &str, extra: &str, body: &str) -> String {
+    let crlf = "\r\n";
+    format!("HTTP/1.1 {status}{crlf}{extra}Content-Length: {}{crlf}Connection: close{crlf}{crlf}{body}", body.len())
+}
+fn r302() -> String {
+    http("302 Found", "Location: http://127.0.0.1:9/x\r\n", "")
+}
+fn rhtml() -> String {
+    http("200 OK", "Content-Type: text/html\r\n", "<html>hi</html>")
+}
+fn rnodata() -> String {
+    http("200 OK", "Content-Type: application/json\r\n", r#"{"status":"ok"}"#)
+}
 
 #[test]
 fn probe_rejects_redirect_html_and_wrong_json() {
-    for (name, raw) in [("302", R302), ("html", RHTML), ("nodata", RNODATA)] {
+    for (name, raw) in [("302", r302()), ("html", rhtml()), ("nodata", rnodata())] {
         let p = serve_raw(raw);
         let r = probe_endpoint(&format!("http://127.0.0.1:{p}"));
         assert!(!r.ok, "{name} must not be ok");
         let e = r.error.expect(name);
         assert!(!e.contains("127.0.0.1:9"), "{e}");
+        match name {
+            "302" => assert_eq!(e, "server answered HTTP 302"),
+            _ => assert_eq!(e, "not an OpenAI-style models endpoint", "{name}"),
+        }
     }
 }
 
@@ -245,7 +259,7 @@ fn probe_rejects_over_cap_body() {
 #[test]
 fn detect_servers_excludes_non_model_servers() {
     let good = serve(r#"{"data":[]}"#);
-    let (a, b, c, d) = (serve_raw(R302), serve_raw(RHTML), serve_raw(RNODATA), format!("http://127.0.0.1:{good}"));
+    let (a, b, c, d) = (serve_raw(r302()), serve_raw(rhtml()), serve_raw(rnodata()), format!("http://127.0.0.1:{good}"));
     let (a, b, c) = (format!("http://127.0.0.1:{a}"), format!("http://127.0.0.1:{b}"), format!("http://127.0.0.1:{c}"));
     let found = detect_servers_at(&[("a", &a), ("b", &b), ("c", &c), ("good", &d)]);
     assert_eq!(found, vec![DetectedServer { name: "good".into(), url: d }]);
