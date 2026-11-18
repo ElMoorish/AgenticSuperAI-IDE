@@ -1,0 +1,69 @@
+#![allow(dead_code)] // budget module is tested but not wired into the loop yet
+//! asa-agent: ACP-style JSON-RPC agent over line-delimited stdio.
+//! The editor owns files, terminals and permissions; this process reasons, plans and asks the
+//! editor to act. Implemented: initialize, session/new, session/prompt (streamed, tool loop).
+
+mod agent;
+mod budget;
+mod diff;
+mod io;
+mod loopguard;
+mod provider;
+mod repair;
+mod session;
+mod shell;
+
+use agent::Mode;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+
+fn main() {
+    let prov = provider::Provider::from_env();
+    let stdin = std::io::stdin();
+    let mut io = io::Io::new(stdin.lock(), std::io::stdout().lock());
+    let mut sessions: HashMap<String, session::Session> = HashMap::new();
+    let mut counter = 0u32;
+
+    while let Some(msg) = io.read_msg() {
+        let req: Value = match msg {
+            Ok(v) => v,
+            Err(e) => {
+                io.send(json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":e}}));
+                continue;
+            }
+        };
+        let id = req.get("id").cloned();
+        let params = &req["params"];
+        let res: Result<Value, (i32, String)> = match req["method"].as_str().unwrap_or("") {
+            "initialize" => Ok(json!({
+                "protocolVersion": 1,
+                "agentInfo": {"name": "asa-agent", "version": env!("CARGO_PKG_VERSION")},
+                "agentCapabilities": {"loadSession": false}
+            })),
+            "session/new" => {
+                counter += 1;
+                let sid = format!("s{counter}");
+                let cwd = params["cwd"].as_str().unwrap_or("").to_string();
+                sessions.insert(sid.clone(), session::Session::new(sid.clone(), cwd));
+                Ok(json!({"sessionId": sid}))
+            }
+            "session/prompt" => {
+                let sid = params["sessionId"].as_str().unwrap_or("");
+                let mode: Mode = serde_json::from_value(params["mode"].clone()).unwrap_or(Mode::Plan);
+                let text = params["prompt"].as_array().and_then(|a| a.iter().find_map(|b| b["text"].as_str())).unwrap_or("");
+                match sessions.get_mut(sid) {
+                    Some(s) => Ok(json!({"stopReason": s.prompt(&mut io, &prov, mode, text)})),
+                    None => Err((-32602, format!("unknown session {sid}"))),
+                }
+            }
+            "session/cancel" => Ok(Value::Null),
+            m => Err((-32601, format!("method not found: {m}"))),
+        };
+        if let Some(id) = id {
+            io.send(match res {
+                Ok(r) => json!({"jsonrpc":"2.0","id":id,"result":r}),
+                Err((c, m)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":c,"message":m}}),
+            });
+        }
+    }
+}

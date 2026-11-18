@@ -1,0 +1,35 @@
+{
+  "name": "asa-agentic-ide",
+  "displayName": "ASA Agentic IDE",
+  "version": "0.1.0",
+  "publisher": "asa",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "asa.ask", "title": "ASA: Ask Agent (Plan mode)" },
+      { "command": "asa.build", "title": "ASA: Ask Agent (Build mode)" }
+    ],
+    "configuration": {
+      "title": "ASA Agentic IDE",
+      "properties": {
+        "asa.agentPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the agent-core binary. Empty = ../target/debug/agent-core relative to the workspace."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -1,0 +1,10 @@
+target/
+extension/node_modules/
+extension/out/
+*.gguf
+.ide-index/
+.ide/cache/
+.superpowers/
+node_modules/
+dist/
+*.log

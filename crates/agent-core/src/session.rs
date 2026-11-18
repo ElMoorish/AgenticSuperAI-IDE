@@ -1,0 +1,252 @@
+//! One chat session: history, the tool loop, and tool execution through the editor.
+
+use crate::agent::{tool_allowed, Mode};
+use crate::diff;
+use crate::io::Io;
+use crate::loopguard::LoopGuard;
+use crate::provider::{is_bad_request, Provider};
+use crate::repair::{extract_text_tool_call, repair_tool_call};
+use crate::shell::{self, Verdict};
+use serde_json::{json, Value};
+use std::io::{BufRead, Write};
+
+const MAX_STEPS: usize = 8;
+
+pub struct Session {
+    pub id: String,
+    pub cwd: String,
+    history: Vec<Value>,
+    guard: LoopGuard,
+    /// Use the XML tool format instead of native tool calls (ASA_TOOL_MODE=xml, or after the server rejected `tools`).
+    xml_only: bool,
+}
+
+impl Session {
+    pub fn new(id: String, cwd: String) -> Self {
+        Self { id, cwd, history: Vec::new(), guard: LoopGuard::default(), xml_only: std::env::var("ASA_TOOL_MODE").map(|v| v == "xml").unwrap_or(false) }
+    }
+
+    fn abs(&self, rel: &str) -> String {
+        if std::path::Path::new(rel).is_absolute() || self.cwd.is_empty() {
+            rel.to_string()
+        } else {
+            std::path::Path::new(&self.cwd).join(rel).to_string_lossy().into_owned()
+        }
+    }
+
+    fn chunk<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, text: &str) {
+        io.notify("session/update", json!({"sessionId": self.id, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}));
+    }
+
+    /// Returns the ACP stop reason.
+    pub fn prompt<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, prov: &Provider, mode: Mode, text: &str) -> &'static str {
+        self.history.push(json!({"role": "user", "content": text}));
+        self.guard = LoopGuard::default(); // repeats only count within one user turn
+        let (mut edited, mut nudged) = (false, false);
+        for _ in 0..MAX_STEPS {
+            // Native tool calling is the default; the XML format is the fallback for models/servers without it.
+            let native = !self.xml_only;
+            let mut messages = vec![json!({"role": "system", "content": mode.system_prompt(native)})];
+            messages.extend(self.history.iter().cloned());
+            let schemas = mode.tool_schemas();
+            let id = self.id.clone();
+            let stream = |io: &mut Io<R, W>, msgs: &[Value], tools: Option<&[Value]>| {
+                prov.chat_stream(msgs, tools, |d| {
+                    io.notify("session/update", json!({"sessionId": id, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": d}}}));
+                })
+            };
+            let mut reply = stream(io, &messages, native.then_some(&schemas[..]));
+            if native && matches!(&reply, Err(e) if is_bad_request(e)) {
+                // e.g. Ollama: "model does not support tools". Switch this session to the XML format.
+                self.xml_only = true;
+                self.chunk(io, "[model rejected native tools; falling back to XML tool calls]\n");
+                messages[0] = json!({"role": "system", "content": mode.system_prompt(false)});
+                reply = stream(io, &messages, None);
+            }
+            let reply = match reply {
+                Ok(r) => r,
+                Err(e) => {
+                    self.chunk(io, &format!("[no model] {e:#}"));
+                    return "end_turn";
+                }
+            };
+
+            if let Some(why) = &reply.aborted {
+                // Garbage must not enter history: it would poison every later request.
+                self.chunk(io, &format!("\n[generation stopped: {why}. Try again or switch model.]\n"));
+                return "end_turn";
+            }
+
+            if !reply.tool_calls.is_empty() {
+                // Native path: assistant message carries tool_calls; every call gets a matching tool message.
+                let calls: Vec<Value> = reply.tool_calls.iter().map(|c| json!({"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.args}})).collect();
+                self.history.push(json!({"role": "assistant", "content": reply.text, "tool_calls": calls}));
+                for c in &reply.tool_calls {
+                    let result = match repair_tool_call(if c.args.trim().is_empty() { "{}" } else { &c.args }) {
+                        Ok(args) => self.execute(io, mode, &c.name, &args),
+                        Err(e) => format!("error: arguments for '{}' are not valid JSON ({e})", c.name),
+                    };
+                    edited |= result.starts_with("applied");
+                    self.history.push(json!({"role": "tool", "tool_call_id": c.id, "content": result}));
+                }
+                continue;
+            }
+
+            self.history.push(json!({"role": "assistant", "content": reply.text}));
+            if !reply.text.contains("<tool_call>") {
+                // A tool call printed as bare JSON text (small models do this): run it anyway.
+                if let Some((name, args)) = extract_text_tool_call(&reply.text, mode.tools()) {
+                    let result = self.execute(io, mode, &name, &args);
+                    edited |= result.starts_with("applied");
+                    self.history.push(json!({"role": "user", "content": format!("<tool_result>\n{result}\n</tool_result>")}));
+                    continue;
+                }
+                // Build mode, a code block in the reply, but nothing edited: the model described a fix instead of applying it.
+                if mode == Mode::Build && !edited && !nudged && reply.text.contains("```") {
+                    nudged = true;
+                    self.history.push(json!({"role": "user", "content": "You showed a fix but did not apply it. Apply it now by calling edit_file_search_replace (read_file first if you need the exact current text), then run_compiler_check."}));
+                    continue;
+                }
+                return "end_turn";
+            }
+            // XML path (fallback, or a model that answered in text despite being offered tools).
+            let result = match repair_tool_call(&reply.text) {
+                Err(e) => format!("error: {e}. Reply with exactly: <tool_call>{{\"name\":\"read_file\",\"arguments\":{{\"path\":\"src/main.rs\"}}}}</tool_call> using one of: {}", mode.tools().join(", ")),
+                Ok(call) => self.execute(io, mode, call["name"].as_str().unwrap_or(""), &call["arguments"]),
+            };
+            edited |= result.starts_with("applied");
+            self.history.push(json!({"role": "user", "content": format!("<tool_result>\n{result}\n</tool_result>")}));
+        }
+        "max_turn_requests"
+    }
+
+    /// Gate, loop-check and run one tool call; always returns text for the model.
+    fn execute<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, mode: Mode, name: &str, args: &Value) -> String {
+        let result = if !tool_allowed(mode, name) {
+            format!("error: tool '{name}' is not available in {mode:?} mode. Available tools: {}", mode.tools().join(", "))
+        } else if self.guard.should_block(name, args) {
+            "blocked: identical tool call repeated. Reflect on the previous result or ask the user.".to_string()
+        } else {
+            self.chunk(io, &format!("\n[tool: {name}]\n"));
+            self.run_tool(io, name, args).unwrap_or_else(|e| format!("error: {e}"))
+        };
+        let preview: String = result.lines().next().unwrap_or("").chars().take(160).collect();
+        self.chunk(io, &format!("\n[result: {preview}]\n"));
+        result
+    }
+
+    fn ask<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, title: &str, detail: &str, allow_label: &str) -> Result<bool, String> {
+        let perm = io.call("session/request_permission", json!({
+            "sessionId": self.id,
+            "toolCall": {"title": title, "content": detail},
+            "options": [
+                {"optionId": "allow", "name": allow_label, "kind": "allow_once"},
+                {"optionId": "reject", "name": "Reject", "kind": "reject_once"}
+            ]
+        }))?;
+        Ok(perm["outcome"]["optionId"] == "allow")
+    }
+
+    /// Run one command in an editor-owned terminal; returns exit code + truncated output.
+    fn exec<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, cmdline: &str) -> Result<String, String> {
+        let parts = shell::split_args(cmdline);
+        let (prog, rest) = parts.split_first().ok_or("empty command")?;
+        let t = io.call("terminal/create", json!({
+            "sessionId": self.id, "command": prog, "args": rest, "cwd": self.cwd, "outputByteLimit": 65536
+        }))?;
+        let tid = t["terminalId"].clone();
+        let exit = io.call("terminal/wait_for_exit", json!({"sessionId": self.id, "terminalId": tid}));
+        let out = io.call("terminal/output", json!({"sessionId": self.id, "terminalId": tid}));
+        let _ = io.call("terminal/release", json!({"sessionId": self.id, "terminalId": tid}));
+        let exit = exit?;
+        let code = exit["exitCode"].as_i64().map(|c| c.to_string()).unwrap_or_else(|| format!("signal {}", exit["signal"]));
+        let text = shell::truncate_output(out?["output"].as_str().unwrap_or_default(), 60, 60);
+        Ok(format!("exit code: {code}\n{text}"))
+    }
+
+    fn run_shell<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, cmdline: &str) -> Result<String, String> {
+        match shell::classify(cmdline) {
+            Verdict::Deny(why) => Err(format!("command refused: {why}")),
+            Verdict::Ask if !self.ask(io, &format!("Run: {cmdline}"), cmdline, "Allow command")? => {
+                Ok("The user rejected this command.".into())
+            }
+            _ => self.exec(io, cmdline),
+        }
+    }
+
+    /// Probe for a project file through the editor, then run the matching check.
+    fn compiler_check<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, args: &Value) -> Result<String, String> {
+        if let Some(c) = args["command"].as_str() {
+            return self.run_shell(io, c);
+        }
+        match self.detect_check(io) {
+            Some(cmd) => self.run_shell(io, cmd),
+            None => Err("no Cargo.toml, tsconfig.json, CMakeLists.txt or .luacheckrc found; use run_shell_scoped".into()),
+        }
+    }
+
+    fn detect_check<R: BufRead, W: Write>(&self, io: &mut Io<R, W>) -> Option<&'static str> {
+        const PROBES: &[(&str, &str)] = &[
+            ("Cargo.toml", "cargo check --message-format short"),
+            ("tsconfig.json", "npx tsc --noEmit"),
+            ("CMakeLists.txt", "cmake --build build"),
+            (".luacheckrc", "luacheck ."),
+        ];
+        PROBES.iter().find(|(file, _)| io.call("fs/read_text_file", json!({"sessionId": self.id, "path": self.abs(file)})).is_ok()).map(|(_, cmd)| *cmd)
+    }
+
+    /// What the model should know right after an edit lands: did the editor reformat the file
+    /// on save (so its next SEARCH block must match the new text), and does the project still compile?
+    fn post_edit_report<R: BufRead, W: Write>(&self, io: &mut Io<R, W>, path: &str, abs: &str, written: &str) -> String {
+        let mut report = String::new();
+        let norm = |s: &str| s.replace("\r\n", "\n");
+        if let Ok(r) = io.call("fs/read_text_file", json!({"sessionId": self.id, "path": abs})) {
+            let cur = r["content"].as_str().unwrap_or_default();
+            if norm(cur) != norm(written) {
+                report += &format!("\n\nNote: the editor reformatted {path} on save. Base your next SEARCH block on this current content:\n{}", shell::truncate_output(cur, 80, 40));
+            }
+        }
+        if std::env::var("ASA_AUTO_DIAGNOSTICS").map(|v| v != "0").unwrap_or(true) && shell::is_source(path) {
+            if let Some(cmd) = self.detect_check(io) {
+                report += &match self.exec(io, cmd) {
+                    Ok(o) if o.starts_with("exit code: 0") => format!("\n\nDiagnostics ({cmd}): clean."),
+                    Ok(o) => format!("\n\nDiagnostics ({cmd}) found problems:\n{o}"),
+                    Err(e) => format!("\n\nDiagnostics ({cmd}) could not run: {e}"),
+                };
+            }
+        }
+        report
+    }
+
+    fn run_tool<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, name: &str, args: &Value) -> Result<String, String> {
+        match name {
+            "run_shell_scoped" => self.run_shell(io, args["command"].as_str().ok_or("missing 'command'")?),
+            "run_compiler_check" => self.compiler_check(io, args),
+            _ => self.run_file_tool(io, name, args),
+        }
+    }
+
+    fn run_file_tool<R: BufRead, W: Write>(&mut self, io: &mut Io<R, W>, name: &str, args: &Value) -> Result<String, String> {
+        let path = args["path"].as_str().ok_or("missing 'path'")?;
+        let abs = self.abs(path);
+        match name {
+            "read_file" => {
+                let r = io.call("fs/read_text_file", json!({"sessionId": self.id, "path": abs}))?;
+                Ok(r["content"].as_str().unwrap_or_default().to_string())
+            }
+            "edit_file_search_replace" => {
+                let diff_text = args["diff"].as_str().ok_or("missing 'diff'")?;
+                let blocks = diff::parse_blocks(diff_text)?;
+                let old = io.call("fs/read_text_file", json!({"sessionId": self.id, "path": abs}))?;
+                let new = diff::apply(old["content"].as_str().unwrap_or_default(), &blocks)?;
+                if !self.ask(io, &format!("Edit {path}"), diff_text, "Allow edit")? {
+                    return Ok("The user rejected this edit. Ask what they want instead.".into());
+                }
+                io.call("fs/write_text_file", json!({"sessionId": self.id, "path": abs, "content": new}))?;
+                let report = self.post_edit_report(io, path, &abs, &new);
+                Ok(format!("applied {} block(s) to {path}{report}", blocks.len()))
+            }
+            _ => Err(format!("tool '{name}' not implemented")),
+        }
+    }
+}
