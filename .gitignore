@@ -8,3 +8,4 @@ extension/out/
 node_modules/
 dist/
 *.log
+__pycache__/
