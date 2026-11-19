@@ -136,6 +136,15 @@ pub fn carries_generation(line: &str) -> bool {
     text("content") || text("reasoning_content") || text("reasoning") || d["tool_calls"].as_array().is_some_and(|a| !a.is_empty())
 }
 
+/// Characters of hidden reasoning in this SSE line. They are generated tokens too: without them a
+/// long think followed by a short answer would make the estimated speed and usage far too small.
+pub fn reasoning_chars(line: &str) -> usize {
+    let Some(data) = line.strip_prefix("data:") else { return 0 };
+    let Ok(v) = serde_json::from_str::<Value>(data.trim()) else { return 0 };
+    let d = &v["choices"][0]["delta"];
+    ["reasoning_content", "reasoning"].iter().filter_map(|k| d[*k].as_str()).map(|s| s.chars().count()).sum()
+}
+
 /// Tokens per second of generation. `window` is the time from the first generated piece to the end;
 /// when it is too short to measure (a one-shot reply), fall back to the whole request time.
 pub fn generation_speed(completion: u64, window: Option<f64>, total: f64) -> f64 {
@@ -234,6 +243,7 @@ impl Provider {
                 first_gen = Some(Instant::now());
             }
             let Ok(deltas) = parse_sse_line(&line) else { break };
+            streamed_chars += reasoning_chars(&line);
             for d in deltas {
                 match d {
                     Delta::Usage { prompt, completion } => reported = Some(Usage { prompt, completion }),
@@ -300,6 +310,14 @@ mod tests {
     fn parses_text_delta() {
         let l = r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#;
         assert_eq!(parse_sse_line(l), Ok(vec![Delta::Text("hi".into())]));
+    }
+
+    #[test]
+    fn hidden_reasoning_counts_as_generated_text() {
+        assert_eq!(reasoning_chars(r#"data: {"choices":[{"delta":{"reasoning_content":"abcd"}}]}"#), 4);
+        assert_eq!(reasoning_chars(r#"data: {"choices":[{"delta":{"reasoning":"xy","content":"zzz"}}]}"#), 2);
+        assert_eq!(reasoning_chars(r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#), 0);
+        assert_eq!(reasoning_chars("data: [DONE]"), 0);
     }
 
     #[test]

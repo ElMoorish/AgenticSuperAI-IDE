@@ -143,11 +143,16 @@ export async function subscribeEvents(onEvent: (ev: UiEvent) => void): Promise<C
   return ch;
 }
 /** `onEvent` REPLACES the current listener; pass the same handler used for subscribeEvents. */
-export async function agentPrompt(mode: AgentMode, text: string, onEvent: (ev: UiEvent) => void): Promise<void> {
+export async function agentPrompt(
+  mode: AgentMode,
+  text: string,
+  onEvent: (ev: UiEvent) => void,
+  images?: { mime: string; data: string }[],
+): Promise<void> {
   requireTauri("agent_prompt");
   const ch = new Channel<UiEvent>();
   ch.onmessage = onEvent;
-  await call<void>("agent_prompt", { mode, text, onEvent: ch });
+  await call<void>("agent_prompt", { mode, text, images: images?.length ? images : null, onEvent: ch });
 }
 export const agentCancel = () => call<void>("agent_cancel");
 /** May reject with "unknown_approval" (stale/replayed id: ignore), "conflict" or "io" (edit write failed). */

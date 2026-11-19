@@ -19,6 +19,55 @@ const MAX_REPLAY_CHARS: usize = 120_000;
 /// Keep only plain user/assistant text from replayed history, newest within the caps, starting on a
 /// user message. Tool calls, system text and anything malformed are dropped: replayed history must
 /// never be able to make the next request invalid.
+/// A picture the user attached to a prompt (base64, no `data:` prefix).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Image {
+    pub mime: String,
+    pub data: String,
+}
+
+/// OpenAI-style user message: plain text, or text plus `image_url` parts.
+pub fn user_message(text: &str, images: &[Image]) -> Value {
+    if images.is_empty() {
+        return json!({"role": "user", "content": text});
+    }
+    let mut parts = vec![json!({"type": "text", "text": text})];
+    for i in images {
+        parts.push(json!({"type": "image_url", "image_url": {"url": format!("data:{};base64,{}", i.mime, i.data)}}));
+    }
+    json!({"role": "user", "content": parts})
+}
+
+/// ACP `image` blocks of a prompt. Only well-formed raster images are taken: a known mime type and
+/// base64 characters only, so nothing else can be smuggled into the `data:` URL.
+pub fn images_from_prompt(blocks: &[Value]) -> Vec<Image> {
+    blocks
+        .iter()
+        .filter(|b| b["type"] == "image")
+        .filter_map(|b| {
+            let mime = b["mimeType"].as_str()?;
+            let data = b["data"].as_str()?;
+            let ok_mime = matches!(mime, "image/png" | "image/jpeg" | "image/webp" | "image/gif");
+            let ok_data = !data.is_empty() && data.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='));
+            (ok_mime && ok_data).then(|| Image { mime: mime.to_string(), data: data.to_string() })
+        })
+        .collect()
+}
+
+pub fn text_with_image_note(text: &str, n: usize) -> String {
+    match n {
+        0 => text.to_string(),
+        1 => format!("{text}
+[1 image was attached to this message]"),
+        n => format!("{text}
+[{n} images were attached to this message]"),
+    }
+}
+
+fn has_image(m: &Value) -> bool {
+    m["content"].as_array().is_some_and(|a| a.iter().any(|p| p["type"] == "image_url"))
+}
+
 pub fn sanitize_history(v: &Value) -> Vec<Value> {
     let Some(arr) = v.as_array() else { return Vec::new() };
     let mut msgs: Vec<Value> = arr
@@ -91,8 +140,25 @@ impl Session {
     }
 
     /// Returns the ACP stop reason.
+    #[cfg(test)]
     pub fn prompt<W: Write>(&mut self, io: &mut Io<W>, prov: &Provider, mode: Mode, text: &str) -> &'static str {
-        self.history.push(json!({"role": "user", "content": text}));
+        self.prompt_with_images(io, prov, mode, text, &[])
+    }
+
+    /// Like `prompt`, with pictures the user attached. The images ride along for every step of this
+    /// turn (the model may need several tool steps to answer) and are dropped from the history when
+    /// the turn ends: they would otherwise fill the context and be re-sent on every later request.
+    pub fn prompt_with_images<W: Write>(&mut self, io: &mut Io<W>, prov: &Provider, mode: Mode, text: &str, images: &[Image]) -> &'static str {
+        let at = self.history.len();
+        self.history.push(user_message(text, images));
+        let stop = self.run_turn(io, prov, mode);
+        if let Some(m) = self.history.get_mut(at) {
+            *m = json!({"role": "user", "content": text_with_image_note(text, images.len())});
+        }
+        stop
+    }
+
+    fn run_turn<W: Write>(&mut self, io: &mut Io<W>, prov: &Provider, mode: Mode) -> &'static str {
         self.guard = LoopGuard::default(); // repeats only count within one user turn
         let (mut edited, mut nudged) = (false, false);
         let cancel = io.cancel_flag();
@@ -112,6 +178,11 @@ impl Session {
                 })
             };
             let mut reply = stream(io, &messages, native.then_some(&schemas[..]));
+            if matches!(&reply, Err(e) if is_bad_request(e)) && self.history.iter().any(has_image) {
+                // The picture is the likeliest reason for the refusal; switching to XML tools would hide it.
+                self.chunk(io, "[the model server rejected the image. A vision model needs its projector file, e.g. llama-server --mmproj <file>; or send the question without the image.]");
+                return "end_turn";
+            }
             if native && matches!(&reply, Err(e) if is_bad_request(e)) {
                 // e.g. Ollama: "model does not support tools". Switch this session to the XML format.
                 self.xml_only = true;
@@ -393,5 +464,45 @@ mod history_tests {
         assert_eq!(out.last().unwrap()["content"], "m199");
         let s = Session::with_history("s1".into(), String::new(), &json!([{"role":"user","content":"a"}]));
         assert_eq!(s.history_len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn text_only_message_stays_plain() {
+        assert_eq!(user_message("hi", &[]), json!({"role": "user", "content": "hi"}));
+    }
+
+    #[test]
+    fn images_become_data_urls_after_the_text() {
+        let m = user_message("what is this", &[Image { mime: "image/png".into(), data: "QUJD".into() }]);
+        assert_eq!(m["content"][0], json!({"type": "text", "text": "what is this"}));
+        assert_eq!(m["content"][1]["image_url"]["url"], "data:image/png;base64,QUJD");
+        assert!(has_image(&m));
+        assert!(!has_image(&json!({"role": "user", "content": "x"})));
+    }
+
+    #[test]
+    fn only_clean_images_are_taken_from_a_prompt() {
+        let blocks = vec![
+            json!({"type": "text", "text": "q"}),
+            json!({"type": "image", "mimeType": "image/png", "data": "QUJD"}),
+            json!({"type": "image", "mimeType": "text/html", "data": "QUJD"}),
+            json!({"type": "image", "mimeType": "image/png", "data": "a\"b"}),
+            json!({"type": "image", "mimeType": "image/jpeg"}),
+        ];
+        assert_eq!(images_from_prompt(&blocks), vec![Image { mime: "image/png".into(), data: "QUJD".into() }]);
+    }
+
+    #[test]
+    fn history_keeps_a_note_not_the_picture() {
+        assert_eq!(text_with_image_note("q", 0), "q");
+        assert_eq!(text_with_image_note("q", 1), "q
+[1 image was attached to this message]");
+        assert_eq!(text_with_image_note("q", 3), "q
+[3 images were attached to this message]");
     }
 }

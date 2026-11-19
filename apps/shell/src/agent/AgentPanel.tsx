@@ -101,7 +101,14 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
             <div key={item.msg.id} className={`msg ${item.msg.role}`}>
               {item.msg.role === "user" && <span className="who">You</span>}
               {item.msg.trimmed && <em className="trimmed">Earlier output is not shown.</em>}
-              {item.msg.role === "assistant" ? <Markdown text={item.msg.text} /> : <div className="text">{item.msg.text}</div>}
+              {item.msg.images && (
+                <div className="shots">
+                  {item.msg.images.map((u, i) => (
+                    <img key={i} src={u} alt="attached" />
+                  ))}
+                </div>
+              )}
+              {item.msg.role === "assistant" ? <Markdown text={item.msg.text} /> : item.msg.text && <div className="text">{item.msg.text}</div>}
             </div>
           ),
         )}
@@ -114,7 +121,7 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
         onMode={setMode}
         busy={busy}
         disabledReason={hasWorkspace ? undefined : "Open a folder first"}
-        onSend={(t) => void send(t)}
+        onSend={(t, imgs) => void send(t, imgs)}
         onStop={() => void cancel()}
       />
       {reviewed && (

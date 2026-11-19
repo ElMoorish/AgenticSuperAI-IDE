@@ -17,6 +17,10 @@ import {
   type UiEvent,
 } from "../ipc";
 import { dispatchUiEvent } from "../events";
+import type { Attachment } from "./images";
+
+/** What the model is asked when only a picture was sent. */
+export const IMAGE_ONLY_PROMPT = "Look at the attached image and describe what is relevant to this project.";
 
 export const MAX_DETAIL_CHARS = 2000;
 export const MAX_MESSAGE_CHARS = 100_000;
@@ -45,6 +49,8 @@ export interface Message {
   text: string;
   /** The beginning of this message was dropped to stay within MAX_MESSAGE_CHARS. */
   trimmed?: boolean;
+  /** Thumbnails (`data:` URLs) of the pictures the user attached to this message. */
+  images?: string[];
 }
 
 export type Approval = Omit<Extract<UiEvent, { type: "approval" }>, "type">;
@@ -67,7 +73,7 @@ export interface AgentState {
 /** UiEvents plus the actions that only exist inside the webview. */
 export type AgentAction =
   | UiEvent
-  | { type: "promptSent"; text: string }
+  | { type: "promptSent"; text: string; images?: string[] }
   | { type: "promptFailed"; code: string; message: string }
   | { type: "promptDone" }
   | { type: "approvalResolved"; id: number }
@@ -95,9 +101,12 @@ function cut(text: string | undefined): { detail?: string; truncated?: boolean }
   return { detail: `${text.slice(0, MAX_DETAIL_CHARS)}\n… ${more.toLocaleString("en-US")} more characters not shown`, truncated: true };
 }
 
-function pushMessage(s: AgentState, role: Message["role"], text: string): AgentState {
+function pushMessage(s: AgentState, role: Message["role"], text: string, images?: string[]): AgentState {
   const t = text.length > MAX_MESSAGE_CHARS ? text.slice(text.length - MAX_MESSAGE_CHARS) : text;
-  let messages = [...s.messages, { id: s.nextId, role, text: t, ...(t.length < text.length ? { trimmed: true } : {}) }];
+  let messages = [
+    ...s.messages,
+    { id: s.nextId, role, text: t, ...(t.length < text.length ? { trimmed: true } : {}), ...(images?.length ? { images } : {}) },
+  ];
   if (messages.length > MAX_MESSAGES) messages = messages.slice(messages.length - MAX_MESSAGES);
   return { ...s, messages, nextId: s.nextId + 1 };
 }
@@ -117,7 +126,7 @@ const END_NOTICE: Record<string, string> = {
 export function reduceAgent(s: AgentState, ev: AgentAction): AgentState {
   switch (ev.type) {
     case "promptSent": {
-      const next = pushMessage(s, "user", ev.text);
+      const next = pushMessage(s, "user", ev.text, ev.images);
       return { ...next, turn: "running", approvals: [], banner: undefined, streaming: false, turnStart: next.nextId };
     }
     case "chunk": {
@@ -250,7 +259,7 @@ interface AgentStore {
   dispatch: (a: AgentAction) => void;
   setMode: (m: AgentMode) => void;
   setContextSize: (n: number) => void;
-  send: (text: string) => Promise<void>;
+  send: (text: string, images?: Attachment[]) => Promise<void>;
   cancel: () => Promise<void>;
   resolve: (id: number, accept: boolean) => Promise<void>;
 }
@@ -269,14 +278,14 @@ export const useAgent = create<AgentStore>((set, get) => ({
     set({ contextSize: v });
     try { localStorage.setItem(CONTEXT_KEY, String(v)); } catch { /* ignore */ }
   },
-  send: async (text) => {
+  send: async (text, images = []) => {
     const t = text.trim();
     const { state, dispatch, mode } = get();
-    if (!t || state.turn !== "idle") return;
-    dispatch({ type: "promptSent", text: t });
+    if ((!t && images.length === 0) || state.turn !== "idle") return;
+    dispatch({ type: "promptSent", text: t, images: images.map((i) => i.url) });
     try {
       // `onEvent` REPLACES the host listener, so it must be the shared hub fan-out.
-      await agentPrompt(mode, t, dispatchUiEvent);
+      await agentPrompt(mode, t || IMAGE_ONLY_PROMPT, dispatchUiEvent, images.map((i) => ({ mime: i.mime, data: i.data })));
     } catch (e) {
       const err = normalizeError(e);
       dispatch({ type: "promptFailed", code: err.code, message: err.message });

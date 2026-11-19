@@ -125,7 +125,8 @@ read_file step appears before the answer, status bar read 9.2 tok/s): the answer
 (a small safe Markdown renderer now handles code, headings, lists, bold, italic); tool steps were listed after the answer text
 (the chat is now one timeline in arrival order); the status-bar "Speed" read 1.4 to 3.9 tok/s while llama-server logged 11 to
 16 tok/s (it averaged over the whole turn including prompt processing; the agent now times from the first generated token).
-Still open: the IDE log (`asa.log`) has no record of approvals or edits. The approval was resolved before the test driver's click, most likely by the
+Fixed afterwards: the IDE log (`asa.log`) now records turns, approval requests (edit path and size, or the command, never file
+contents or prompt text), accept/reject, and whether an edit was applied; covered by host tests. The approval was resolved before the test driver's click, most likely by the
 user (the window was on their screen); no auto-accept path was found in the code.
 
 ### 3.7 Working conclusions (and their limits)
@@ -144,11 +145,12 @@ Each phase needs its own short design before code (the repository convention).
 |---|---|---|
 | P1 | **Real-window verification** of the shell with a real model | `docs/shell-checklist.md` section 6 fully ticked |
 | P2 | **MoE beyond RAM**: llama.cpp expert offload measured on a 35B-A3B (3.4); remaining: cold-cache protocol, more repeats, a coding-quality check, and an SSD-streaming fork if stable | Table 3.4 with a cold-cache procedure and a quality check |
-| P2b | **Vision in the IDE**: image attach/paste in chat, image blocks in the agent protocol, `image_url` parts to the server (llama-server needs `--mmproj`) | Ask a question about a pasted screenshot in the IDE and get a correct answer |
+| P2b | **Vision in the IDE** (built): paste, drop or pick up to 4 pictures (downscaled to 1568 px), ACP `image` blocks, `image_url` parts to the server (llama-server needs `--mmproj`); pictures are sent on every step of the turn and kept in history only as a note. Verified in the real window with the 35B + mmproj: a pasted red/green/blue picture was answered "Red, Green, Blue". Not yet: a screen-capture button, a "this model has no vision" hint from the server's `/props` (it reports `modalities.vision`), the "server rejected the image" message was not exercised | Ask a question about a pasted screenshot in the IDE and get a correct answer (done); polish items above |
 | P3 | **Build/run with context-safe digests**: compile C++ and run apps, return short summaries instead of raw logs | Agent fixes a failing build in a sample repo without exceeding a set context budget |
 | P4 | **Model manager**: detect VRAM, RAM and disk speed; recommend backend and quantization; download to a chosen drive; start and stop servers; show a measured speed estimate before large downloads | Fresh machine: pick a model, get a working endpoint, estimate within a stated error of the measured speed |
 | P5 | **AirLLM improvements** worth upstreaming: cleanup patch (4.8x), resident layers, keep-4-bit-on-GPU (untested), prefetch with compression | Reproducible benchmark and a pull request or a documented fork |
 | P6 | **Desktop control** of any application with context-safe output | Separate design |
+| P8 | **70 GB model test** (planned): a model of about 70 GB on this machine (16 GB RAM, 8 GB VRAM). A dense 70B streams about 70 GB per token (minutes per token at SSD speed), so the realistic candidates are MoE models with expert offload; measure prompt and generation speed cold and warm, first-token delay, disk use, and agent tool-call quality, following the protocol of 3.4 | Table like 3.4 for the 70 GB model, with the cold-cache procedure and a quality check |
 | P7 | Installer and release | NSIS bundle builds; signed or documented SmartScreen note |
 
 Open questions: does AirLLM expert streaming work for Qwen3.5-MoE (it needs a per-model setting that was not found)?

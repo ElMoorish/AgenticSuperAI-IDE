@@ -16,6 +16,8 @@ const EDIT_DIFF: &str = "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n";
 struct MockModel {
     url: String,
     requests: Arc<AtomicU64>,
+    /// Raw body of every request, in arrival order.
+    seen: Arc<Mutex<Vec<String>>>,
 }
 
 fn sse(chunks: &[Value]) -> String {
@@ -38,10 +40,13 @@ fn start_mock_model_with(nav: Option<(&'static str, Value)>) -> MockModel {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(AtomicU64::new(0));
     let r2 = requests.clone();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(mut conn) = conn else { continue };
             let r3 = r2.clone();
+            let seen3 = seen2.clone();
             let nav = nav.clone();
             std::thread::spawn(move || {
                 let mut rd = BufReader::new(conn.try_clone().unwrap());
@@ -59,6 +64,7 @@ fn start_mock_model_with(nav: Option<(&'static str, Value)>) -> MockModel {
                 if rd.read_exact(&mut body).is_err() {
                     return;
                 }
+                seen3.lock().unwrap().push(String::from_utf8_lossy(&body).to_string());
                 r3.fetch_add(1, Ordering::SeqCst);
                 let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                 let has_tool_result = req["messages"].as_array().is_some_and(|m| {
@@ -86,7 +92,7 @@ fn start_mock_model_with(nav: Option<(&'static str, Value)>) -> MockModel {
             });
         }
     });
-    MockModel { url, requests }
+    MockModel { url, requests, seen }
 }
 
 type Events = Arc<Mutex<Vec<UiEvent>>>;
@@ -250,4 +256,90 @@ async fn agent_can_list_find_and_search_the_project_in_both_modes() {
     // a missing folder is an ordinary tool error the model can read, not a crash
     let missing = run_nav("list_dir", json!({"path": "nope"}), "plan").await;
     assert!(missing.contains("not found"), "{missing}");
+}
+
+#[tokio::test]
+async fn approvals_and_edits_are_written_to_the_log_without_file_contents() {
+    let model = start_mock_model();
+    let (st, _dir, got) = fixture(&model).await;
+    let turn = start_prompt(&st);
+    let id = wait_for(&got, |e| if let UiEvent::Approval { id, .. } = e { Some(*id) } else { None }).await;
+    st.resolve_approval(id, true).await.unwrap();
+    let (_, _, new_text) = wait_for(&got, |e| match e {
+        UiEvent::ApplyEdit { id: i, rel, old, new_text } if *i == id => Some((rel.clone(), old.clone(), new_text.clone())),
+        _ => None,
+    })
+    .await;
+    let cur = st.read_file("a.txt").unwrap();
+    st.save_file("a.txt", &new_text, Some(&cur.stamp)).unwrap();
+    st.confirm_edit(id, true, None).unwrap();
+    turn.await.unwrap().unwrap();
+
+    let log = st.logger().tail(100).join("
+");
+    for want in ["turn started: mode build", "requested: edit a.txt (4 -> 4 chars)", "edit accepted: a.txt", "edit ", " applied: a.txt", "turn ended: end_turn"] {
+        assert!(log.contains(want), "log lacks {want:?}:
+{log}");
+    }
+    assert!(!log.contains("change old to new"), "the prompt text must not be logged:
+{log}");
+    st.shutdown().await;
+}
+
+#[tokio::test]
+async fn rejected_edit_is_logged() {
+    let model = start_mock_model();
+    let (st, _dir, got) = fixture(&model).await;
+    let turn = start_prompt(&st);
+    let id = wait_for(&got, |e| if let UiEvent::Approval { id, .. } = e { Some(*id) } else { None }).await;
+    st.resolve_approval(id, false).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(15), turn).await.expect("turn ended");
+    let log = st.logger().tail(100).join("
+");
+    assert!(log.contains(&format!("approval {id} edit rejected")), "{log}");
+    st.shutdown().await;
+}
+
+const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+#[tokio::test]
+async fn an_attached_image_reaches_the_model_this_turn_and_only_a_note_stays_in_history() {
+    let model = start_mock_model();
+    let (st, _dir, _got) = fixture(&model).await;
+    let img = ImageDto { mime: "image/png".into(), data: PNG_B64.into() };
+    st.agent_prompt_with("plan", "what is in this picture", std::slice::from_ref(&img)).await.unwrap();
+    let first = model.seen.lock().unwrap().clone();
+    assert!(first.len() >= 2, "plan mode answers the refused edit with a second request");
+    for body in &first {
+        assert!(body.contains("data:image/png;base64,"), "every step of the turn still carries the picture");
+    }
+    let before = first.len();
+    st.agent_prompt("plan", "and now?").await.unwrap();
+    let later = model.seen.lock().unwrap().clone();
+    for body in &later[before..] {
+        assert!(!body.contains("base64,"), "the picture is not re-sent on later turns");
+        assert!(body.contains("1 image was attached"), "a note remains: {body}");
+    }
+    let log = st.logger().tail(100).join("
+");
+    assert!(log.contains("1 image(s) of"), "{log}");
+    assert!(!log.contains(PNG_B64), "image data must never be logged");
+    st.shutdown().await;
+}
+
+#[tokio::test]
+async fn bad_images_are_refused_before_the_agent_sees_them() {
+    let model = start_mock_model();
+    let (st, _dir, _got) = fixture(&model).await;
+    let bad = |mime: &str, data: &str| ImageDto { mime: mime.into(), data: data.into() };
+    for imgs in [
+        vec![bad("text/html", "QUJD")],
+        vec![bad("image/png", "")],
+        vec![bad("image/png", "a\"b")],
+        vec![bad("image/png", "QUJD"); MAX_IMAGES + 1],
+    ] {
+        assert_eq!(st.agent_prompt_with("plan", "x", &imgs).await.unwrap_err().code, "bad_request");
+    }
+    assert_eq!(model.requests.load(Ordering::SeqCst), 0);
+    st.shutdown().await;
 }

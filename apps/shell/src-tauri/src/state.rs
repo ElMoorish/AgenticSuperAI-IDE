@@ -397,6 +397,35 @@ pub async fn run_pump(mut rx: UnboundedReceiver<UiEvent>, slot: SinkSlot) {
 
 // ------------------------------------------------------------------ DTOs
 
+/// A picture attached to a prompt: base64 data (no `data:` prefix) and its mime type.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ImageDto {
+    pub mime: String,
+    pub data: String,
+}
+
+pub const MAX_IMAGES: usize = 4;
+/// Base64 characters per image (about 5 MB of picture).
+pub const MAX_IMAGE_B64: usize = 7_000_000;
+
+fn check_images(images: &[ImageDto]) -> Result<(), AppError> {
+    if images.len() > MAX_IMAGES {
+        return Err(AppError::bad_request(format!("at most {MAX_IMAGES} images per message")));
+    }
+    for i in images {
+        if !matches!(i.mime.as_str(), "image/png" | "image/jpeg" | "image/webp" | "image/gif") {
+            return Err(AppError::bad_request("images must be PNG, JPEG, WebP or GIF"));
+        }
+        if i.data.is_empty() || i.data.len() > MAX_IMAGE_B64 {
+            return Err(AppError::bad_request("an image is empty or larger than 5 MB"));
+        }
+        if !i.data.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'=')) {
+            return Err(AppError::bad_request("image data is not valid base64"));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StampDto {
@@ -595,6 +624,25 @@ impl BufferView for NoBuffers {
     }
 }
 
+/// Cut a value for the log: one short line, never a whole file or prompt.
+fn clip(s: &str, max: usize) -> String {
+    let one: String = s.chars().take(max).collect();
+    if s.chars().count() > max { format!("{one}...") } else { one }
+}
+
+/// Audit line for a new approval: what is asked, not the file content.
+fn describe_request(id: u64, p: &Pending) -> String {
+    match p {
+        Pending::Edit { pe, .. } => format!(
+            "approval {id} requested: edit {} ({} -> {} chars)",
+            clip(&pe.path, 200),
+            pe.old.chars().count(),
+            pe.new.chars().count()
+        ),
+        Pending::Command(pc) => format!("approval {id} requested: command {}", clip(&pc.command, 200)),
+    }
+}
+
 fn approval_event(id: u64, p: &Pending) -> UiEvent {
     match p {
         Pending::Edit { pe, .. } => UiEvent::Approval {
@@ -730,6 +778,7 @@ impl WsCtx {
             Pending::Command(pc) => pc.id = id,
         }
         let ev = approval_event(id, &p);
+        self.log.write("INFO", &describe_request(id, &p));
         self.pending.add(id, p);
         self.send(ev);
         id
@@ -961,10 +1010,17 @@ impl WsCtx {
         Ok(sid)
     }
 
-    async fn run_turn(&self, agent: &Arc<AgentCtx>, mode: &str, text: &str) -> Result<String, AppError> {
+    async fn run_turn(&self, agent: &Arc<AgentCtx>, mode: &str, text: &str, images: &[ImageDto]) -> Result<String, AppError> {
         let sid = self.ensure_session(agent).await?;
-        agent.begin_turn(text);
-        let params = json!({"sessionId": sid, "mode": mode, "prompt": [{"type": "text", "text": text}]});
+        // a replayed conversation keeps a note instead of the picture
+        agent.begin_turn(&match images.len() {
+            0 => text.to_string(),
+            n => format!("{text}
+[{n} image(s) were attached to this message]"),
+        });
+        let mut blocks = vec![json!({"type": "text", "text": text})];
+        blocks.extend(images.iter().map(|i| json!({"type": "image", "mimeType": i.mime, "data": i.data})));
+        let params = json!({"sessionId": sid, "mode": mode, "prompt": blocks});
         match agent.sup.request("session/prompt", params).await {
             Ok(v) => Ok(v.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn").to_string()),
             Err(AcpError::Remote(v)) => Err(AppError::new(
@@ -1318,10 +1374,16 @@ impl AppState {
 
     // ---- agent
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn agent_prompt(&self, mode: &str, text: &str) -> Result<(), AppError> {
+        self.agent_prompt_with(mode, text, &[]).await
+    }
+
+    pub async fn agent_prompt_with(&self, mode: &str, text: &str, images: &[ImageDto]) -> Result<(), AppError> {
         if mode != "plan" && mode != "build" {
             return Err(AppError::bad_request("mode must be \"plan\" or \"build\""));
         }
+        check_images(images)?;
         let ctx = self.ctx()?;
         let agent = ctx.agent.clone().ok_or_else(|| {
             AppError::new("agent_missing", "agent-core executable not found (build it or set ASA_AGENT_EXE)")
@@ -1331,11 +1393,21 @@ impl AppState {
         }
         let _guard = TurnGuard(ctx.turn_active.clone());
         self.sink.forget_missed_turn_end(); // a new turn supersedes an old unseen end
-        let result = ctx.run_turn(&agent, mode, text).await;
+        let pics = if images.is_empty() {
+            String::new()
+        } else {
+            format!(", {} image(s) of {} KB", images.len(), images.iter().map(|i| i.data.len() * 3 / 4).sum::<usize>() / 1024)
+        };
+        ctx.log.write("INFO", &format!("turn started: mode {mode}, {} chars{pics}", text.chars().count()));
+        let result = ctx.run_turn(&agent, mode, text, images).await;
         let stop = match &result {
             Ok(s) => s.clone(),
             Err(_) => "error".to_string(),
         };
+        match &result {
+            Ok(s) => ctx.log.write("INFO", &format!("turn ended: {s}")),
+            Err(e) => ctx.log.write("WARN", &format!("turn failed: {}", clip(&e.message, 200))),
+        }
         // Through the agent loop so it follows every update; if that loop is gone (workspace
         // closed mid-turn) fall back to the app-level channel so the UI never hangs.
         if agent.ordered_tx.send(UiEvent::TurnEnd { stop_reason: stop }).is_err() {
@@ -1369,16 +1441,19 @@ impl AppState {
         let agent = ctx.agent.clone().ok_or_else(|| AppError::new("agent_missing", "no agent"))?;
         match resolution {
             Resolution::Command { agent_id, accept } => {
+                ctx.log.write("INFO", &format!("approval {id} command {}", if accept { "accepted" } else { "rejected" }));
                 let option = if accept { "allow" } else { "reject" };
                 agent.sup.respond(agent_id, Ok(json!({"outcome": {"outcome": "selected", "optionId": option}})));
                 Ok(())
             }
             Resolution::EditRejected { agent_id } => {
+                ctx.log.write("INFO", &format!("approval {id} edit rejected"));
                 agent.sup.respond(agent_id, Err(json!({"code": -32000, "message": "edit rejected by the user"})));
                 Ok(())
             }
             Resolution::EditAccepted { pe, stamp: None } => {
                 // a new file has no buffer to apply it to: the host creates it (create-only)
+                ctx.log.write("INFO", &format!("approval {id} edit accepted: new file {}", clip(&pe.path, 200)));
                 let ws = ctx.ws.clone();
                 let (path, new) = (pe.path.clone(), pe.new.clone());
                 let res = tokio::task::spawn_blocking(move || write_atomic_create_new(&ws, &path, &new))
@@ -1387,6 +1462,7 @@ impl AppState {
                 Self::answer_write(&agent, pe.agent_id, res.map(|_| ()).map_err(AppError::from))
             }
             Resolution::EditAccepted { pe, stamp: Some(stamp) } => {
+                ctx.log.write("INFO", &format!("approval {id} edit accepted: {}", clip(&pe.path, 200)));
                 ctx.pending.await_confirmation(id, pe.clone());
                 ctx.send(UiEvent::ApplyEdit { id, rel: pe.path.clone(), old: pe.old.clone(), new_text: pe.new.clone() });
                 // Safety net: a closed or reloading webview must not leave the agent waiting forever.
@@ -1433,8 +1509,10 @@ impl AppState {
         };
         let agent = ctx.agent.clone().ok_or_else(|| AppError::new("agent_missing", "no agent"))?;
         if ok {
+            ctx.log.write("INFO", &format!("edit {id} applied: {}", clip(&pe.path, 200)));
             agent.sup.respond(pe.agent_id, Ok(Value::Null));
         } else {
+            ctx.log.write("WARN", &format!("edit {id} not applied: {}", clip(error.as_deref().unwrap_or("editor could not apply it"), 200)));
             let msg = error.unwrap_or_else(|| "the editor could not apply the edit".into());
             agent.sup.respond(pe.agent_id, Err(json!({"code": -32000, "message": msg})));
         }

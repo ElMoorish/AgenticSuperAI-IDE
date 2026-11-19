@@ -5,7 +5,7 @@
 //! JS argument names are camelCase (`onEvent`, `onOutput`); errors arrive as `{code, message}`.
 
 use crate::state::{
-    parse_settings_input, AppError, AppState, DetectedDto, DirEntryDto, ProbeDto, ReadFileResult, StampDto, UiEvent, WorkspaceInfo,
+    parse_settings_input, AppError, AppState, DetectedDto, DirEntryDto, ImageDto, ProbeDto, ReadFileResult, StampDto, UiEvent, WorkspaceInfo,
 };
 use ide_host::settings::Settings;
 use std::sync::Arc;
@@ -80,10 +80,11 @@ pub async fn agent_prompt(
     state: S<'_>,
     mode: String,
     text: String,
+    images: Option<Vec<ImageDto>>,
     on_event: Channel<UiEvent>,
 ) -> Result<(), AppError> {
     state.set_sink(Arc::new(channel_sink(on_event)));
-    state.agent_prompt(&mode, &text).await
+    state.agent_prompt_with(&mode, &text, &images.unwrap_or_default()).await
 }
 
 #[tauri::command]

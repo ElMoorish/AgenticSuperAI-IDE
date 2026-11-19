@@ -66,10 +66,12 @@ fn main() {
             "session/prompt" => {
                 let sid = params["sessionId"].as_str().unwrap_or("");
                 let mode: Mode = serde_json::from_value(params["mode"].clone()).unwrap_or(Mode::Plan);
-                let text = params["prompt"].as_array().and_then(|a| a.iter().find_map(|b| b["text"].as_str())).unwrap_or("");
+                let blocks = params["prompt"].as_array().cloned().unwrap_or_default();
+                let text = blocks.iter().find_map(|b| b["text"].as_str()).unwrap_or("");
+                let images = session::images_from_prompt(&blocks);
                 match sessions.get_mut(sid) {
                     Some(s) => {
-                        let stop = s.prompt(&mut io, &prov, mode, text);
+                        let stop = s.prompt_with_images(&mut io, &prov, mode, text, &images);
                         io.end_turn();
                         Ok(json!({"stopReason": stop}))
                     }
