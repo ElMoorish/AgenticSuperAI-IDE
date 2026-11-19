@@ -130,9 +130,9 @@ const host: Settings = {
 };
 
 describe("settings ipc", () => {
-  it("pickSettings keeps exactly the six known keys", () => {
+  it("pickSettings keeps exactly the seven known keys", () => {
     const dirty = { ...host, fontSize: 9, extra: true } as unknown as Settings;
-    expect(Object.keys(pickSettings(dirty)).sort()).toEqual(["endpoint", "font_size", "ignore", "model", "recent", "theme"]);
+    expect(Object.keys(pickSettings(dirty)).sort()).toEqual(["api_key", "endpoint", "font_size", "ignore", "model", "recent", "theme"]);
   });
 
   it("setSettings sends only the known keys", async () => {
@@ -141,7 +141,7 @@ describe("settings ipc", () => {
     await setSettings({ ...host, junk: 1 } as unknown as Settings);
     const [cmd, args] = invokeMock.mock.calls[0] as [string, { settings: Record<string, unknown> }];
     expect(cmd).toBe("set_settings");
-    expect(Object.keys(args.settings).sort()).toEqual(["endpoint", "font_size", "ignore", "model", "recent", "theme"]);
+    expect(Object.keys(args.settings).sort()).toEqual(["api_key", "endpoint", "font_size", "ignore", "model", "recent", "theme"]);
   });
 
   it("setTheme re-fetches settings and merges onto the freshest copy", async () => {
