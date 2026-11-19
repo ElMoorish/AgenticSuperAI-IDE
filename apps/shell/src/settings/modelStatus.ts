@@ -9,7 +9,7 @@ interface S {
   models: string[];
   error: string | null;
   endpoint: string;
-  probe: (url?: string) => Promise<void>;
+  probe: (url?: string, apiKey?: string) => Promise<void>;
 }
 
 let seq = 0;
@@ -19,12 +19,12 @@ export const useModelStatus = create<S>((set) => ({
   models: [],
   error: null,
   endpoint: "",
-  async probe(url) {
+  async probe(url, apiKey) {
     const endpoint = url ?? useStore.getState().settings.value?.endpoint ?? "";
     if (!endpoint) { set({ state: "unknown", models: [], error: null, endpoint }); return; }
     const mine = ++seq;
     try {
-      const r = await probeEndpoint(endpoint);
+      const r = await probeEndpoint(endpoint, apiKey);
       if (mine !== seq) return; // a newer probe superseded this one
       set(r.ok ? { state: "up", models: r.models, error: null, endpoint } : { state: "down", models: [], error: r.error ?? "unreachable", endpoint });
     } catch (e) {

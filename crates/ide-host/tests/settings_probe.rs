@@ -301,3 +301,33 @@ fn settings_odd_font_size_is_not_corruption() {
     assert_eq!((s.font_size, s.model.as_str()), (13, "keep"));
     assert!(!d.path().join("settings.json.bad").exists());
 }
+
+/// A server that answers 401 unless `Authorization: Bearer secret` is sent.
+#[test]
+fn probe_sends_the_api_key_as_a_bearer_token() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let mut s = s;
+            let mut buf = [0u8; 2048];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+            let resp = if req.contains("authorization: bearer secret") {
+                let body = r#"{"data":[{"id":"m1"}]}"#;
+                format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            } else {
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+            };
+            let _ = s.write_all(resp.as_bytes());
+        }
+    });
+    let url = format!("http://127.0.0.1:{port}");
+    let denied = probe_endpoint(&url);
+    assert!(!denied.ok);
+    assert!(denied.error.unwrap().contains("401"));
+    let ok = probe_endpoint_with_key(&url, "secret");
+    assert!(ok.ok, "{:?}", ok.error);
+    assert_eq!(ok.models, vec!["m1".to_string()]);
+    assert!(!probe_endpoint_with_key(&url, "wrong").ok);
+}

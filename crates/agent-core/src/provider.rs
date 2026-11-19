@@ -158,7 +158,13 @@ impl Provider {
         let (tx, rx) = mpsc::channel::<Ev>();
         let url = format!("{}/v1/chat/completions", self.base);
         std::thread::spawn(move || {
-            let resp = match agent.post(&url).send_json(body) {
+            let mut req = agent.post(&url);
+            if let Ok(k) = std::env::var("ASA_LLM_KEY") {
+                if !k.trim().is_empty() {
+                    req = req.set("Authorization", &format!("Bearer {}", k.trim()));
+                }
+            }
+            let resp = match req.send_json(body) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(Ev::Failed(anyhow::Error::from(e).context("llama-server not reachable or rejected the request (see config/start-llama-server.ps1)")));

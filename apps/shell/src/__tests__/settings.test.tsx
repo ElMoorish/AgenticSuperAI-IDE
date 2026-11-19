@@ -18,7 +18,7 @@ vi.mock("../ipc", async (orig) => ({
   windowControl: async () => {},
 }));
 
-const base = { endpoint: "http://localhost:11434", model: "qwen", ignore: ["node_modules"], theme: "harbor", font_size: 13, recent: [] };
+const base = { endpoint: "http://localhost:11434", model: "qwen", api_key: "", ignore: ["node_modules"], theme: "harbor", font_size: 13, recent: [] };
 
 beforeEach(() => {
   localStorage.clear();

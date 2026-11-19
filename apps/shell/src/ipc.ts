@@ -66,6 +66,7 @@ export interface DetectedServer { name: string; url: string }
 export interface Settings {
   endpoint: string;
   model: string;
+  api_key: string;
   ignore: string[];
   theme: string;
   font_size: number;
@@ -153,10 +154,11 @@ export const agentCancel = () => call<void>("agent_cancel");
 export const resolveApproval = (id: number, accept: boolean) => call<void>("resolve_approval", { id, accept });
 /** Report the outcome of an `applyEdit` event. `unknown_approval` = already answered/timed out: ignore. */
 export const confirmEdit = (id: number, ok: boolean, error?: string) => call<void>("confirm_edit", { id, ok, error: error ?? null });
-export const probeEndpoint = (url: string) => call<ProbeResult>("probe_endpoint", { url });
+/** `apiKey` undefined = use the saved key. */
+export const probeEndpoint = (url: string, apiKey?: string) => call<ProbeResult>("probe_endpoint", { url, apiKey });
 export const detectServers = () => call<DetectedServer[]>("detect_servers");
 export const getSettings = () => call<Settings>("get_settings");
-export const SETTINGS_KEYS = ["endpoint", "model", "ignore", "theme", "font_size", "recent"] as const;
+export const SETTINGS_KEYS = ["endpoint", "model", "api_key", "ignore", "theme", "font_size", "recent"] as const;
 /** Rust rejects unknown keys, so only the six known keys are ever sent. */
 export function pickSettings(s: Settings): Settings {
   const o = s as unknown as Record<string, unknown>;

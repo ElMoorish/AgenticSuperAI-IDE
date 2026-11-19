@@ -126,7 +126,7 @@ describe("splitter drag", () => {
 });
 
 const host: Settings = {
-  endpoint: "http://127.0.0.1:11434", model: "m", ignore: ["x"], theme: "harbor", font_size: 13, recent: ["a"],
+  endpoint: "http://127.0.0.1:11434", model: "m", api_key: "", ignore: ["x"], theme: "harbor", font_size: 13, recent: ["a"],
 };
 
 describe("settings ipc", () => {

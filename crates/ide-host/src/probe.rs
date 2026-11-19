@@ -66,10 +66,15 @@ fn parse_models(v: &serde_json::Value) -> Vec<String> {
 
 /// `GET {base}/v1/models` with a 3 s total timeout. Never panics.
 pub fn probe_endpoint(base: &str) -> ProbeResult {
-    probe_with_timeout(base, Duration::from_secs(3))
+    probe_endpoint_with_key(base, "")
 }
 
-fn probe_with_timeout(base: &str, timeout: Duration) -> ProbeResult {
+/// Same, sending `Authorization: Bearer <key>` when the key is not empty.
+pub fn probe_endpoint_with_key(base: &str, key: &str) -> ProbeResult {
+    probe_with_timeout(base, key, Duration::from_secs(3))
+}
+
+fn probe_with_timeout(base: &str, key: &str, timeout: Duration) -> ProbeResult {
     let url = models_url(base);
     let agent = ureq::AgentBuilder::new()
         .timeout(timeout)
@@ -78,7 +83,11 @@ fn probe_with_timeout(base: &str, timeout: Duration) -> ProbeResult {
         .timeout_write(timeout)
         .redirects(0)
         .build();
-    let resp = match agent.get(&url).call() {
+    let mut req = agent.get(&url);
+    if !key.trim().is_empty() {
+        req = req.set("Authorization", &format!("Bearer {}", key.trim()));
+    }
+    let resp = match req.call() {
         Ok(r) => r,
         Err(ureq::Error::Status(code, _)) => return fail(format!("server answered HTTP {code}")),
         Err(ureq::Error::Transport(t)) => {
@@ -131,7 +140,7 @@ pub fn detect_servers_at(candidates: &[(&str, &str)]) -> Vec<DetectedServer> {
         .map(|(name, url)| {
             let (name, url) = (name.to_string(), url.to_string());
             std::thread::spawn(move || {
-                probe_with_timeout(&url, Duration::from_millis(500)).ok.then(|| DetectedServer { name, url })
+                probe_with_timeout(&url, "", Duration::from_millis(500)).ok.then(|| DetectedServer { name, url })
             })
         })
         .collect();

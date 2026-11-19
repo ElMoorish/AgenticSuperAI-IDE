@@ -8,7 +8,7 @@ import { useModelStatus, validateEndpoint } from "./modelStatus";
 const FONT_MIN = 8;
 const FONT_MAX = 32;
 
-const DEFAULTS: Settings = { endpoint: "", model: "", ignore: [], theme: "harbor", font_size: 13, recent: [] };
+const DEFAULTS: Settings = { endpoint: "", model: "", api_key: "", ignore: [], theme: "harbor", font_size: 13, recent: [] };
 
 /** Modal settings: model server, model, theme, editor font, ignore globs and context size. */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
@@ -21,6 +21,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const [endpoint, setEndpoint] = useState(current.endpoint);
   const [model, setModel] = useState(current.model);
+  const [apiKey, setApiKey] = useState(current.api_key ?? "");
   const [themeSel, setThemeSel] = useState<string>(theme);
   const [fontSize, setFontSize] = useState(String(current.font_size));
   const [ignore, setIgnore] = useState(current.ignore.join("\n"));
@@ -47,9 +48,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const endpointError = validateEndpoint(endpoint);
   useEffect(() => {
     if (endpointError) return;
-    const t = setTimeout(() => { void useModelStatus.getState().probe(endpoint.trim()); }, 400);
+    const t = setTimeout(() => { void useModelStatus.getState().probe(endpoint.trim(), apiKey); }, 400);
     return () => clearTimeout(t);
-  }, [endpoint, endpointError]);
+  }, [endpoint, endpointError, apiKey]);
 
   const fontNum = Number(fontSize);
   const fontError = !fontSize.trim() || !Number.isFinite(fontNum) || fontNum < FONT_MIN || fontNum > FONT_MAX
@@ -71,6 +72,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         ...base,
         endpoint: endpoint.trim(),
         model: model.trim(),
+        api_key: apiKey.trim(),
         font_size: fontNum,
         ignore: ignore.split("\n").map((l) => l.trim()).filter(Boolean),
       };
@@ -150,6 +152,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </select>
           </label>
         )}
+
+        <label className="sfield">
+          <span>API key (only if the server asks for one)</span>
+          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" spellCheck={false} />
+        </label>
 
         <label className="sfield">
           <span>Model</span>

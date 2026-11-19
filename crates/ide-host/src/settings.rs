@@ -12,6 +12,8 @@ const MAX_RECENT: usize = 10;
 pub struct Settings {
     pub endpoint: String,
     pub model: String,
+    /// Optional bearer token for servers that require one (sent as `Authorization: Bearer`).
+    pub api_key: String,
     pub ignore: Vec<String>,
     pub theme: String,
     #[serde(deserialize_with = "de_font_size")]
@@ -24,6 +26,7 @@ impl Default for Settings {
         Settings {
             endpoint: "http://127.0.0.1:11434".into(),
             model: String::new(),
+            api_key: String::new(),
             ignore: Vec::new(),
             theme: "harbor".into(),
             font_size: 13,

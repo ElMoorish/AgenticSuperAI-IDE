@@ -103,8 +103,8 @@ pub fn confirm_edit(state: S<'_>, id: u64, ok: bool, error: Option<String>) -> R
 }
 
 #[tauri::command]
-pub async fn probe_endpoint(state: S<'_>, url: String) -> Result<ProbeDto, AppError> {
-    state.probe_endpoint(&url).await
+pub async fn probe_endpoint(state: S<'_>, url: String, api_key: Option<String>) -> Result<ProbeDto, AppError> {
+    state.probe_endpoint(&url, api_key).await
 }
 
 #[tauri::command]

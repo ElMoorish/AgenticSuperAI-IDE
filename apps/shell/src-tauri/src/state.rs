@@ -547,7 +547,7 @@ pub fn map_update(update: &Value) -> Option<UiEvent> {
 /// Parse settings coming from the webview, rejecting unknown keys (so a camelCase
 /// `fontSize` typo is an error instead of being silently ignored).
 pub fn parse_settings_input(v: Value) -> Result<Settings, AppError> {
-    const KEYS: [&str; 6] = ["endpoint", "model", "ignore", "theme", "font_size", "recent"];
+    const KEYS: [&str; 7] = ["endpoint", "model", "api_key", "ignore", "theme", "font_size", "recent"];
     let obj = v.as_object().ok_or_else(|| AppError::bad_request("settings must be an object"))?;
     if let Some(k) = obj.keys().find(|k| !KEYS.contains(&k.as_str())) {
         return Err(AppError::bad_request(format!("unknown settings key: {k} (expected one of {KEYS:?})")));
@@ -1136,6 +1136,9 @@ impl AppState {
         if let Some(exe) = &self.agent_exe {
             let mut cfg = AgentConfig::new(exe.clone(), ws.root().to_path_buf());
             cfg.env.push(("ASA_LLM_URL".into(), settings.endpoint.clone()));
+            if !settings.api_key.trim().is_empty() {
+                cfg.env.push(("ASA_LLM_KEY".into(), settings.api_key.trim().to_string()));
+            }
             if !settings.model.is_empty() {
                 cfg.env.push(("ASA_LLM_MODEL".into(), settings.model.clone()));
             }
@@ -1455,7 +1458,7 @@ impl AppState {
             if new.ignore != current.ignore {
                 ctx.start_watcher(&new.ignore);
             }
-            let agent_env_changed = new.endpoint != current.endpoint || new.model != current.model;
+            let agent_env_changed = new.endpoint != current.endpoint || new.model != current.model || new.api_key != current.api_key;
             if agent_env_changed && ctx.agent.is_some() && !ctx.turn_active.load(Ordering::SeqCst) {
                 // The agent reads its endpoint/model from the environment at spawn: restart it.
                 let _g = self.open_lock.lock().await;
@@ -1470,12 +1473,14 @@ impl AppState {
         Ok(new)
     }
 
-    pub async fn probe_endpoint(&self, url: &str) -> Result<ProbeDto, AppError> {
+    pub async fn probe_endpoint(&self, url: &str, api_key: Option<String>) -> Result<ProbeDto, AppError> {
+        // None = use the saved key (the periodic probe); Some = the key being typed in settings.
+        let key = api_key.unwrap_or_else(|| self.inner.lock().unwrap().settings.api_key.clone());
         let url = url.trim().trim_end_matches('/').to_string();
         if !valid_endpoint(&url) {
             return Err(AppError::bad_request("endpoint must be an http:// or https:// URL"));
         }
-        tokio::task::spawn_blocking(move || probe::probe_endpoint(&url).into())
+        tokio::task::spawn_blocking(move || probe::probe_endpoint_with_key(&url, &key).into())
             .await
             .map_err(|e| AppError::new("io", e.to_string()))
     }
