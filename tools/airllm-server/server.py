@@ -68,9 +68,55 @@ class LayerCache:
         model.load_layer_to_cpu = load
 
 
+def keep_resident(model, budget_bytes):
+    """Keep as many layers as fit in `budget_bytes` of VRAM loaded for good.
+
+    Stock AirLLM loads every layer from disk and evicts it again for every generated token, so the
+    per-token cost is (model bytes / disk speed). Layers kept on the GPU are read once and never again,
+    which removes their share of that cost. Returns (layers kept, bytes kept).
+    """
+    # AirLLM's 4/8-bit modes only shrink the files on disk: a layer is expanded to the run dtype on the
+    # GPU, so the budget must count the expanded size (parameters x dtype bytes), not the file size.
+    elem = torch.empty(0, dtype=model.running_dtype).element_size()
+    resident, used = set(), 0
+    for idx in model._streamed_indices:
+        size = sum(p.numel() for p in model.layers[idx].parameters()) * elem
+        if size and used + size <= budget_bytes:
+            resident.add(idx)
+            used += size
+    loaded = set()
+    for idx in model._streamed_indices:
+        module = model.layers[idx]
+        orig_pre = list(module._forward_pre_hooks.values())
+        orig_post = list(module._forward_hooks.values())
+        module._forward_pre_hooks.clear()
+        module._forward_hooks.clear()
+
+        def pre(mod, args, orig_pre=orig_pre):
+            i = mod._airllm_idx
+            if i in resident and i in loaded:
+                return None  # already on the GPU
+            r = None
+            for h in orig_pre:
+                r = h(mod, args)
+            loaded.add(i)
+            return r
+
+        def post(mod, args, output, orig_post=orig_post):
+            if mod._airllm_idx in resident:
+                return output  # keep it on the GPU
+            for h in orig_post:
+                output = h(mod, args, output)
+            return output
+
+        module.register_forward_pre_hook(pre)
+        module.register_forward_hook(post)
+    return len(resident), used
+
+
 # --- model ---------------------------------------------------------------------------------------
 class Engine:
-    def __init__(self, path, name, compression, max_seq_len, cache_gb, thinking):
+    def __init__(self, path, name, compression, max_seq_len, cache_gb, thinking, vram_gb=0.0):
         patch_cleanup()
         kw = {"max_seq_len": max_seq_len}
         if compression:
@@ -99,6 +145,9 @@ class Engine:
         self.cache = LayerCache(int(cache_gb * 1024**3)) if cache_gb > 0 else None
         if self.cache:
             self.cache.install(self.model)
+        if vram_gb > 0:
+            n, used = keep_resident(self.model, int(vram_gb * 1024**3))
+            log(f"{n} layers kept on the GPU ({used / 1024**3:.2f} GB)")
         log(f"model ready in {time.time() - t:.0f}s (compression={compression}, cache={cache_gb} GB)")
 
     def prompt_ids(self, messages):
@@ -288,11 +337,13 @@ def main():
     ap.add_argument("--cache-gb", type=float, default=0.0,
                     help="RAM for a static layer cache (0 = off, default). No gain was measured on a 4B model "
                          "(Windows already caches the files); it may help for models near the RAM size.")
+    ap.add_argument("--vram-gb", type=float, default=0.0,
+                    help="VRAM to hold layers permanently (they are never re-read from disk). 0 = off")
     ap.add_argument("--thinking", action="store_true", help="let the model emit its reasoning (slow)")
     a = ap.parse_args()
     name = a.name or a.model.rstrip("\\/").split("\\")[-1].split("/")[-1]
     ENGINE = Engine(a.model, name, None if a.compression == "none" else a.compression,
-                    a.max_seq_len, a.cache_gb, a.thinking)
+                    a.max_seq_len, a.cache_gb, a.thinking, a.vram_gb)
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     log(f"listening on http://{a.host}:{a.port}  (model id: {name})")
     try:
