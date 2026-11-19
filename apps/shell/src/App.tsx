@@ -1,9 +1,10 @@
 import { useEffect } from "react";
 import { Shell } from "./layout/Shell";
 import { useAgent } from "./agent/agentStore";
+import { usePalette } from "./palette/paletteStore";
 import { useStore } from "./state/store";
 
-export type ShortcutAction = "zoomIn" | "zoomOut" | "zoomReset" | "toggleFile" | "toggleAgent" | "toggleBottom" | "stopAgent";
+export type ShortcutAction = "zoomIn" | "zoomOut" | "zoomReset" | "toggleFile" | "toggleAgent" | "toggleBottom" | "stopAgent" | "palette";
 
 const EDITABLE = "input, textarea, select, [contenteditable=\"\"], [contenteditable=\"true\"], .xterm, .monaco-editor";
 
@@ -13,11 +14,13 @@ export function shortcutAction(e: KeyboardEvent): ShortcutAction | null {
   if (e.getModifierState?.("AltGraph")) return null;
   // Emergency stop works everywhere, including inside the editor and terminals.
   if (e.key === "Escape" && e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey) return "stopAgent";
+  if ((e.key === "p" || e.key === "P") && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return "palette";
   const t = e.target;
   if (t instanceof Element && t.closest(EDITABLE)) return null;
   const mod = e.ctrlKey !== e.metaKey; // exactly one of ctrl/cmd
   if (!mod) return null;
   const k = e.key.toLowerCase();
+  if (k === "k" && !e.altKey && !e.shiftKey) return "palette";
   if (e.altKey) return k === "b" && !e.shiftKey ? "toggleAgent" : null;
   if (k === "=" || k === "+") return "zoomIn"; // shift is how + is typed on many layouts
   if (k === "-" || k === "_") return "zoomOut";
@@ -34,6 +37,11 @@ export const shouldHandleShortcut = (e: KeyboardEvent): boolean => shortcutActio
 export function handleShortcut(e: KeyboardEvent): boolean {
   const a = shortcutAction(e);
   if (!a) return false;
+  if (a === "palette") {
+    usePalette.getState().toggle();
+    e.preventDefault();
+    return true;
+  }
   if (a === "stopAgent") {
     void useAgent.getState().cancel();
     e.preventDefault();

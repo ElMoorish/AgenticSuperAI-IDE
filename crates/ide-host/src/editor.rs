@@ -144,6 +144,30 @@ impl<B: BufferView> EditorHandler<B> {
                     command,
                 })
             }
+            // Read-only navigation for the agent (an extension to the ACP set). Results are text.
+            "asa/list_dir" => {
+                let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+                match crate::search::list_dir_text(&self.ws, &[], path, 300) {
+                    Ok(t) => HandlerOutcome::Reply(json!({ "text": t })),
+                    Err(e) => fs_err(&e),
+                }
+            }
+            "asa/find_files" => {
+                let Some(q) = params.get("query").and_then(Value::as_str) else {
+                    return err(-32602, "missing string param: query");
+                };
+                let found = crate::search::find_files(&self.ws, &[], q, 50);
+                let text = if found.is_empty() { "no matching files".to_string() } else { found.join("\n") };
+                HandlerOutcome::Reply(json!({ "text": text }))
+            }
+            "asa/search_text" => {
+                let Some(q) = params.get("query").and_then(Value::as_str) else {
+                    return err(-32602, "missing string param: query");
+                };
+                let hits = crate::search::search_text(&self.ws, &[], q, 60);
+                let text = if hits.is_empty() { "no matches".to_string() } else { hits.join("\n") };
+                HandlerOutcome::Reply(json!({ "text": text }))
+            }
             _ => err(-32601, format!("method not found: {method}")),
         }
     }

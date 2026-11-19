@@ -1248,6 +1248,13 @@ impl AppState {
 
     // ---- files
 
+    /// Quick-open: workspace files matching `query`, best first (skips ignored folders).
+    pub fn search_files(&self, query: &str, limit: usize) -> Result<Vec<String>, AppError> {
+        let ws = self.workspace()?;
+        let ignore = self.inner.lock().unwrap().settings.ignore.clone();
+        Ok(ide_host::search::find_files(&ws, &ignore, query, limit.clamp(1, 200)))
+    }
+
     pub fn list_dir(&self, rel: &str) -> Result<Vec<DirEntryDto>, AppError> {
         self.list_dir_capped(rel, MAX_DIR_ENTRIES)
     }

@@ -36,6 +36,7 @@ fn main() {
             commands::pick_folder,
             commands::open_folder,
             commands::list_dir,
+            commands::search_files,
             commands::read_file,
             commands::save_file,
             commands::subscribe_events,

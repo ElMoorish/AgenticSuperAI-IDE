@@ -11,7 +11,7 @@ export const COMMANDS = [
   "pick_folder", "open_folder", "list_dir", "read_file", "save_file", "subscribe_events",
   "agent_prompt", "agent_cancel", "resolve_approval", "confirm_edit", "probe_endpoint", "detect_servers",
   "get_settings", "set_settings", "start_user_terminal", "terminal_write", "terminal_resize",
-  "close_terminal", "copy_diagnostics", "recovery_save", "recovery_list", "recovery_clear",
+  "close_terminal", "search_files", "copy_diagnostics", "recovery_save", "recovery_list", "recovery_clear",
 ] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -178,6 +178,7 @@ export async function startUserTerminal(rows: number, cols: number, onOutput: (b
 export const terminalWrite = (id: number, data: number[]) => call<void>("terminal_write", { id, data });
 export const terminalResize = (id: number, rows: number, cols: number) => call<void>("terminal_resize", { id, rows, cols });
 export interface RecoveredBuffer { rel: string; text: string; savedAtMs: number }
+export const searchFiles = (query: string, limit = 50) => call<string[]>("search_files", { query, limit });
 export const copyDiagnostics = () => call<string>("copy_diagnostics");
 export const recoverySave = (rel: string, text: string) => call<void>("recovery_save", { rel, text });
 export const recoveryList = () => call<RecoveredBuffer[]>("recovery_list");

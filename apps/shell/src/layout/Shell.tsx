@@ -5,6 +5,8 @@ import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
 import { Splitter } from "./Splitter";
 import { StatusBar } from "./StatusBar";
+import { CommandPalette } from "../palette/CommandPalette";
+import { usePalette } from "../palette/paletteStore";
 import { SettingsDialog } from "../settings/SettingsDialog";
 import { useSettingsDialog } from "../settings/dialogStore";
 import { TerminalPanel } from "../terminal/TerminalPanel";
@@ -45,6 +47,7 @@ export function Shell() {
     />
   );
 
+  const paletteOpen = usePalette((s) => s.isOpen);
   const settingsOpen = useSettingsDialog((s) => s.isOpen);
   const closeSettings = useSettingsDialog((s) => s.close);
 
@@ -77,6 +80,7 @@ export function Shell() {
 
       <StatusBar />
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
+      {paletteOpen && <CommandPalette />}
     </div>
   );
 }

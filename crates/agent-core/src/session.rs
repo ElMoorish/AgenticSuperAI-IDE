@@ -205,6 +205,9 @@ impl Session {
             self.emit(io, events::tool_call_kind(&tid, &title, events::kind_for(name), "in_progress"));
             match self.run_tool(io, name, args) {
                 Ok(r) => (r, true),
+                Err(e) if e.contains("program not found") => {
+                    (format!("error: {e}. Shell built-ins (dir, ls, cd, type) are not programs here. To see files use list_dir; to read a file use read_file; to find text use search_text."), false)
+                }
                 Err(e) => (format!("error: {e}"), false),
             }
         };
@@ -299,7 +302,30 @@ impl Session {
         match name {
             "run_shell_scoped" => self.run_shell(io, args["command"].as_str().ok_or("missing 'command'")?),
             "run_compiler_check" => self.compiler_check(io, args),
+            "list_dir" | "find_files" | "search_text" => self.nav_tool(io, name, args),
             _ => self.run_file_tool(io, name, args),
+        }
+    }
+
+    /// Read-only project navigation, answered by the editor (these tools take no `path` argument
+    /// except list_dir, whose path is optional and defaults to the project root).
+    fn nav_tool<W: Write>(&mut self, io: &mut Io<W>, name: &str, args: &Value) -> Result<String, String> {
+        match name {
+            "list_dir" => {
+                let r = io.call("asa/list_dir", json!({"sessionId": self.id, "path": args["path"].as_str().unwrap_or("")}))?;
+                Ok(r["text"].as_str().unwrap_or_default().to_string())
+            }
+            "find_files" => {
+                let q = args["query"].as_str().ok_or("missing 'query'")?;
+                let r = io.call("asa/find_files", json!({"sessionId": self.id, "query": q}))?;
+                Ok(r["text"].as_str().unwrap_or_default().to_string())
+            }
+            "search_text" => {
+                let q = args["query"].as_str().ok_or("missing 'query'")?;
+                let r = io.call("asa/search_text", json!({"sessionId": self.id, "query": q}))?;
+                Ok(r["text"].as_str().unwrap_or_default().to_string())
+            }
+            _ => Err(format!("tool '{name}' not implemented")),
         }
     }
 

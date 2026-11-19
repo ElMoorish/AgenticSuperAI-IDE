@@ -1,6 +1,7 @@
 import { windowControl } from "../ipc";
 import { useModelProbe, useModelStatus } from "../settings/modelStatus";
 import { useSettingsDialog } from "../settings/dialogStore";
+import { usePalette } from "../palette/paletteStore";
 import { useStore } from "../state/store";
 import { THEME_LABELS, THEME_NAMES, isThemeName } from "../styles/themes";
 
@@ -27,10 +28,10 @@ export function TitleBar() {
     <header className="title" data-tauri-drag-region>
       <span className="brand" data-tauri-drag-region>ASA</span>
       <span className="folder" data-tauri-drag-region>{folder ?? "No folder open"}</span>
-      <div className="cmd" data-tauri-drag-region aria-hidden="true">
-        <span>Search files, run commands, ask the agent</span>
+      <button type="button" className="cmd" aria-label="Search files and commands (Ctrl+K or Ctrl+P)" onClick={() => usePalette.getState().open()}>
+        <span>Search files and commands</span>
         <span className="mono">Ctrl+K</span>
-      </div>
+      </button>
       <button
         type="button"
         className={`chip chip-${status}`}

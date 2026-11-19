@@ -98,6 +98,11 @@ pub async fn resolve_approval(state: S<'_>, id: u64, accept: bool) -> Result<(),
 
 /// The UI reports the outcome of an `ApplyEdit` (applied and saved, or why not).
 #[tauri::command]
+pub async fn search_files(state: S<'_>, query: String, limit: Option<usize>) -> Result<Vec<String>, AppError> {
+    blocking(&state, move |st| st.search_files(&query, limit.unwrap_or(50))).await
+}
+
+#[tauri::command]
 pub fn confirm_edit(state: S<'_>, id: u64, ok: bool, error: Option<String>) -> Result<(), AppError> {
     state.confirm_edit(id, ok, error)
 }

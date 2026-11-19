@@ -28,6 +28,12 @@ fn sse(chunks: &[Value]) -> String {
 }
 
 fn start_mock_model() -> MockModel {
+    start_mock_model_with(None)
+}
+
+/// `nav`: Some((tool, args)) makes the model call that read-only tool first and then repeat the
+/// tool result back in its answer, so a test can see what the host returned.
+fn start_mock_model_with(nav: Option<(&'static str, Value)>) -> MockModel {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(AtomicU64::new(0));
@@ -36,6 +42,7 @@ fn start_mock_model() -> MockModel {
         for conn in listener.incoming() {
             let Ok(mut conn) = conn else { continue };
             let r3 = r2.clone();
+            let nav = nav.clone();
             std::thread::spawn(move || {
                 let mut rd = BufReader::new(conn.try_clone().unwrap());
                 let mut len = 0usize;
@@ -57,7 +64,17 @@ fn start_mock_model() -> MockModel {
                 let has_tool_result = req["messages"].as_array().is_some_and(|m| {
                     m.iter().any(|x| x["role"] == "tool" || x["content"].as_str().is_some_and(|c| c.contains("<tool_result>")))
                 });
-                let payload = if has_tool_result {
+                let last_result = req["messages"].as_array().and_then(|m| {
+                    m.iter().rev().find_map(|x| {
+                        let c = x["content"].as_str()?;
+                        (x["role"] == "tool" || c.contains("<tool_result>")).then(|| c.to_string())
+                    })
+                });
+                let payload = if let (Some((tool, args)), false) = (&nav, has_tool_result) {
+                    sse(&[json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call1","function":{"name":tool,"arguments":args.to_string()}}]}}]})])
+                } else if nav.is_some() {
+                    sse(&[json!({"choices":[{"delta":{"content":format!("RESULT<<{}>>", last_result.unwrap_or_default())}}]})])
+                } else if has_tool_result {
                     sse(&[json!({"choices":[{"delta":{"content":"All done."}}]})])
                 } else {
                     let args = json!({"path": "a.txt", "diff": EDIT_DIFF}).to_string();
@@ -202,4 +219,35 @@ async fn a_file_changed_after_the_proposal_is_not_clobbered() {
     let _ = r;
     assert_eq!(read(&dir), "someone else wrote this\n", "the newer on-disk text must survive");
     st.shutdown().await;
+}
+
+async fn run_nav(tool: &'static str, args: Value, mode: &str) -> String {
+    let model = start_mock_model_with(Some((tool, args)));
+    let (st, _dir, got) = fixture(&model).await;
+    let st2 = st.clone();
+    let mode = mode.to_string();
+    let turn = tokio::spawn(async move { st2.agent_prompt(&mode, "look around").await });
+    let _ = tokio::time::timeout(Duration::from_secs(20), turn).await.expect("turn ended");
+    wait_for(&got, |e| matches!(e, UiEvent::TurnEnd { .. }).then_some(())).await;
+    let text: String = got
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| if let UiEvent::Chunk { text } = e { Some(text.clone()) } else { None })
+        .collect();
+    st.shutdown().await;
+    text
+}
+
+#[tokio::test]
+async fn agent_can_list_find_and_search_the_project_in_both_modes() {
+    let listed = run_nav("list_dir", json!({"path": "."}), "plan").await;
+    assert!(listed.contains("a.txt (4 bytes)"), "{listed}");
+    let found = run_nav("find_files", json!({"query": "a.t"}), "build").await;
+    assert!(found.contains("a.txt"), "{found}");
+    let hits = run_nav("search_text", json!({"query": "OLD"}), "plan").await;
+    assert!(hits.contains("a.txt:1: old"), "{hits}");
+    // a missing folder is an ordinary tool error the model can read, not a crash
+    let missing = run_nav("list_dir", json!({"path": "nope"}), "plan").await;
+    assert!(missing.contains("not found"), "{missing}");
 }

@@ -14,3 +14,4 @@ pub mod watcher;
 pub mod pending;
 pub mod recovery;
 pub mod log;
+pub mod search;
