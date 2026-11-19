@@ -19,6 +19,13 @@ fn main() {
                 eprintln!("agent-core executable not found; the agent is unavailable");
             }
             let state = Arc::new(AppState::new(dir, exe));
+            let log = state.logger();
+            log.write("INFO", &format!("startup v{}", env!("CARGO_PKG_VERSION")));
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                log.write("PANIC", &info.to_string());
+                prev(info);
+            }));
             let rx = state.take_event_rx().expect("event receiver taken once");
             tauri::async_runtime::spawn(run_pump(rx, state.sink_slot()));
             tauri::async_runtime::spawn(run_gpu_loop(state.clone()));
@@ -44,6 +51,10 @@ fn main() {
             commands::terminal_write,
             commands::terminal_resize,
             commands::close_terminal,
+            commands::copy_diagnostics,
+            commands::recovery_save,
+            commands::recovery_list,
+            commands::recovery_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the application");

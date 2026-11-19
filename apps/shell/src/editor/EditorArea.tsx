@@ -5,6 +5,7 @@ import { useStore } from "../state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { models, type Buffer } from "./models";
 import { monacoThemeName } from "./monacoThemes";
+import { RecoveryBanner } from "./RecoveryBanner";
 import { Tabs } from "./Tabs";
 import { useEditorState } from "./useEditorState";
 import type { CodeEditor, MonacoModel } from "./monacoModels";
@@ -182,6 +183,7 @@ export function EditorArea() {
         onClose={requestClose}
         onSave={(r) => void saveRel(r)}
       />
+      <RecoveryBanner />
       {approvals
         .filter((a) => a.kind === "edit" && active !== null && models.resolve(a.title) === models.resolve(active))
         .map((a) => (

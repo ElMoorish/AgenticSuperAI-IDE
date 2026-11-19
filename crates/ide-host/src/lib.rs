@@ -12,3 +12,5 @@ pub mod probe;
 pub mod settings;
 pub mod watcher;
 pub mod pending;
+pub mod recovery;
+pub mod log;

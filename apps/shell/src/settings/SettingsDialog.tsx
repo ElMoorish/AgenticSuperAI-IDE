@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { detectServers, getSettings, normalizeError, setSettings, type DetectedServer, type Settings } from "../ipc";
+import { copyDiagnostics, detectServers, getSettings, normalizeError, setSettings, type DetectedServer, type Settings } from "../ipc";
 import { clampContext, useAgent } from "../agent/agentStore";
 import { useStore } from "../state/store";
 import { THEME_LABELS, THEME_NAMES, isThemeName } from "../styles/themes";
@@ -28,6 +28,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [detected, setDetected] = useState<DetectedServer[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [diag, setDiag] = useState<string | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -89,6 +90,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       setSaveError(`Could not save settings: ${normalizeError(e).message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const copyDiag = async () => {
+    try {
+      const text = await copyDiagnostics();
+      try {
+        await navigator.clipboard.writeText(text);
+        setDiag("Copied. Paste it into your bug report. It has no file contents, passwords or your user folder.");
+      } catch {
+        setDiag("Could not reach the clipboard. Try again.");
+      }
+    } catch (e) {
+      setDiag(`Could not build the report: ${normalizeError(e).message}`);
     }
   };
 
@@ -171,6 +186,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <span>Hidden from the file tree and the agent (one pattern per line)</span>
           <textarea rows={4} value={ignore} onChange={(e) => setIgnore(e.target.value)} spellCheck={false} className="mono" />
         </label>
+
+        <div className="sfield">
+          <span>Problems?</span>
+          <button type="button" onClick={() => void copyDiag()}>Copy diagnostics</button>
+          {diag && <div className="smsg" role="status">{diag}</div>}
+        </div>
 
         {saveError && <div className="banner err" role="alert"><span>{saveError}</span></div>}
         <div className="modal-actions">

@@ -52,7 +52,15 @@ fn main() {
                 counter += 1;
                 let sid = format!("s{counter}");
                 let cwd = params["cwd"].as_str().unwrap_or("").to_string();
-                sessions.insert(sid.clone(), session::Session::new(sid.clone(), cwd));
+                let s = match params.get("history") {
+                    Some(h) => session::Session::with_history(sid.clone(), cwd, h),
+                    None => session::Session::new(sid.clone(), cwd),
+                };
+                let replayed = s.history_len();
+                sessions.insert(sid.clone(), s);
+                if replayed > 0 {
+                    eprintln!("session {sid}: replayed {replayed} messages");
+                }
                 Ok(json!({"sessionId": sid}))
             }
             "session/prompt" => {

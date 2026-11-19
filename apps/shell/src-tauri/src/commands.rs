@@ -148,3 +148,23 @@ pub async fn terminal_resize(state: S<'_>, id: u64, rows: u16, cols: u16) -> Res
 pub fn close_terminal(state: S<'_>, id: u64) {
     state.close_terminal(id);
 }
+
+#[tauri::command]
+pub fn copy_diagnostics(state: S<'_>) -> String {
+    state.diagnostics()
+}
+
+#[tauri::command]
+pub fn recovery_save(state: S<'_>, rel: String, text: String) -> Result<(), AppError> {
+    state.recovery_save(&rel, &text)
+}
+
+#[tauri::command]
+pub fn recovery_list(state: S<'_>) -> Result<Vec<ide_host::recovery::RecoveredBuffer>, AppError> {
+    state.recovery_list()
+}
+
+#[tauri::command]
+pub fn recovery_clear(state: S<'_>, rel: String) -> Result<(), AppError> {
+    state.recovery_clear(&rel)
+}

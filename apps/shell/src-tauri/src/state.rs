@@ -10,6 +10,8 @@
 
 use ide_host::acp::AgentEvent;
 use ide_host::editor::{BufferView, EditorHandler, HandlerOutcome};
+use ide_host::log::{diagnostics, DiagnosticsInput, RotatingLog};
+use ide_host::recovery::{RecoveredBuffer, RecoveryStore};
 use ide_host::pending::{Pending, PendingStore, Resolution};
 use ide_host::files::{read_stamped, write_atomic, write_atomic_create_new, FileStamp, WriteError};
 use ide_host::probe::{self, DetectedServer, ProbeResult};
@@ -656,9 +658,50 @@ struct AgentCtx {
     init_lock: tokio::sync::Mutex<()>,
     /// Ordered injection into the agent event loop (see `run_turn`).
     ordered_tx: UnboundedSender<UiEvent>,
+    /// Plain-text conversation so far (user / assistant), replayed into a fresh agent session
+    /// after the agent restarts. Tool traffic is deliberately not kept.
+    transcript: Mutex<Vec<Value>>,
+    /// The user message of the running turn and the assistant text streamed so far.
+    turn: Mutex<(Option<String>, String)>,
+}
+
+const MAX_TRANSCRIPT_MESSAGES: usize = 60;
+
+impl AgentCtx {
+    fn begin_turn(&self, user: &str) {
+        *self.turn.lock().unwrap() = (Some(user.to_string()), String::new());
+    }
+
+    fn note_chunk(&self, text: &str) {
+        let mut t = self.turn.lock().unwrap();
+        if t.0.is_some() && t.1.len() < 200_000 {
+            t.1.push_str(text);
+        }
+    }
+
+    /// Called in order after the turn's last update. A cancelled or failed turn leaves no trace in
+    /// the agent's own history, so it is not recorded here either.
+    fn finish_turn(&self, stop: &str) {
+        let (user, reply) = std::mem::take(&mut *self.turn.lock().unwrap());
+        let Some(user) = user else { return };
+        if stop == "cancelled" || stop == "error" || reply.trim().is_empty() {
+            return;
+        }
+        let mut tr = self.transcript.lock().unwrap();
+        tr.push(json!({"role": "user", "content": user}));
+        tr.push(json!({"role": "assistant", "content": reply}));
+        let over = tr.len().saturating_sub(MAX_TRANSCRIPT_MESSAGES);
+        tr.drain(..over - over % 2);
+    }
+
+    fn history_param(&self) -> Option<Value> {
+        let tr = self.transcript.lock().unwrap();
+        (!tr.is_empty()).then(|| Value::Array(tr.clone()))
+    }
 }
 
 pub struct WsCtx {
+    log: Arc<RotatingLog>,
     ws: Workspace,
     ui_tx: UnboundedSender<UiEvent>,
     pending: PendingStore,
@@ -754,6 +797,9 @@ impl WsCtx {
         match ev {
             AgentEvent::Update { update, .. } => {
                 if let Some(u) = map_update(&update) {
+                    if let UiEvent::Chunk { text } = &u {
+                        agent.note_chunk(text);
+                    }
                     self.send(u);
                 }
             }
@@ -762,17 +808,20 @@ impl WsCtx {
                 agent.epoch.fetch_add(1, Ordering::SeqCst);
                 release_all_terms(&agent.live_terms, &agent.terms);
                 let _ = self.pending.clear();
+                self.log.write("ERROR", "agent process exited unexpectedly");
                 self.send(UiEvent::AgentState { state: "crashed".into() });
             }
             AgentEvent::Restarted { .. } => {
                 agent.epoch.fetch_add(1, Ordering::SeqCst);
                 release_all_terms(&agent.live_terms, &agent.terms);
                 let _ = self.pending.clear();
+                self.log.write("WARN", "agent restarted");
                 self.send(UiEvent::AgentState { state: "restarted".into() });
             }
             AgentEvent::GaveUp => {
                 release_all_terms(&agent.live_terms, &agent.terms);
                 let _ = self.pending.clear();
+                self.log.write("ERROR", "agent could not be restarted; giving up");
                 self.send(UiEvent::AgentState { state: "gave_up".into() });
             }
         }
@@ -897,11 +946,11 @@ impl WsCtx {
                 "fs": {"readTextFile": true, "writeTextFile": true}, "terminal": true}}),
         )
         .await?;
-        let r = call(
-            "session/new",
-            json!({"cwd": self.ws.root().to_string_lossy(), "mcpServers": []}),
-        )
-        .await?;
+        let mut new_params = json!({"cwd": self.ws.root().to_string_lossy(), "mcpServers": []});
+        if let Some(h) = agent.history_param() {
+            new_params["history"] = h; // restart: continue the conversation
+        }
+        let r = call("session/new", new_params).await?;
         let sid = r
             .get("sessionId")
             .and_then(Value::as_str)
@@ -914,6 +963,7 @@ impl WsCtx {
 
     async fn run_turn(&self, agent: &Arc<AgentCtx>, mode: &str, text: &str) -> Result<String, AppError> {
         let sid = self.ensure_session(agent).await?;
+        agent.begin_turn(text);
         let params = json!({"sessionId": sid, "mode": mode, "prompt": [{"type": "text", "text": text}]});
         match agent.sup.request("session/prompt", params).await {
             Ok(v) => Ok(v.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn").to_string()),
@@ -954,13 +1004,16 @@ pub struct AppState {
     pub(crate) confirm_timeout: Duration,
     terms: Arc<Mutex<HashMap<u64, Arc<UserPty>>>>,
     next_term: AtomicU64,
+    log: Arc<RotatingLog>,
 }
 
 impl AppState {
     pub fn new(settings_dir: PathBuf, agent_exe: Option<PathBuf>) -> AppState {
         let settings = Settings::load(&settings_dir);
         let (ui_tx, ui_rx) = mpsc::unbounded_channel();
+        let log = Arc::new(RotatingLog::standard(settings_dir.join("logs")));
         AppState {
+            log,
             settings_dir,
             agent_exe,
             ui_tx,
@@ -973,6 +1026,45 @@ impl AppState {
             terms: Arc::new(Mutex::new(HashMap::new())),
             next_term: AtomicU64::new(1),
         }
+    }
+
+    pub fn logger(&self) -> Arc<RotatingLog> {
+        self.log.clone()
+    }
+
+    fn recovery(&self) -> Result<RecoveryStore, AppError> {
+        let root = self.ctx()?.ws.root().to_string_lossy().into_owned();
+        Ok(RecoveryStore::new(&self.settings_dir.join("recovery"), &root))
+    }
+
+    pub fn recovery_save(&self, rel: &str, text: &str) -> Result<(), AppError> {
+        let ws = self.workspace()?;
+        ws.resolve(rel)?; // only paths inside the workspace
+        self.recovery()?.save_buffer(rel, text).map_err(|e| AppError::new("recovery", e.to_string()))
+    }
+
+    pub fn recovery_list(&self) -> Result<Vec<RecoveredBuffer>, AppError> {
+        Ok(self.recovery()?.list())
+    }
+
+    pub fn recovery_clear(&self, rel: &str) -> Result<(), AppError> {
+        self.recovery()?.clear(rel);
+        Ok(())
+    }
+
+    /// Plain-text report for bug reports: versions, settings (no secrets), recent log lines.
+    pub fn diagnostics(&self) -> String {
+        let settings = self.inner.lock().unwrap().settings.clone();
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+        let exe = self.agent_exe.as_ref().map(|p| p.to_string_lossy().into_owned());
+        diagnostics(&DiagnosticsInput {
+            app_version: env!("CARGO_PKG_VERSION"),
+            os: std::env::consts::OS,
+            agent_exe: exe.as_deref(),
+            settings: &settings,
+            log_tail: self.log.tail(200),
+            home: home.as_deref(),
+        })
     }
 
     /// Receiver of every UI event; taken once by the pump task.
@@ -1059,12 +1151,16 @@ impl AppState {
                     session: Mutex::new(None),
                     init_lock: tokio::sync::Mutex::new(()),
                     ordered_tx,
+                    transcript: Mutex::new(Vec::new()),
+                    turn: Mutex::new((None, String::new())),
                 }),
                 events,
                 tev_rx,
             ));
         }
+        self.log.write("INFO", "workspace opened");
         let ctx = Arc::new(WsCtx {
+            log: self.log.clone(),
             ws: ws.clone(),
             ui_tx: self.ui_tx.clone(),
             pending: PendingStore::new(),
@@ -1090,7 +1186,12 @@ impl AppState {
                             Some(ev) => c.on_agent_event(&a, ev),
                             None => break,
                         },
-                        Some(ev) = ordered_rx.recv() => c.send(ev),
+                        Some(ev) = ordered_rx.recv() => {
+                            if let UiEvent::TurnEnd { stop_reason } = &ev {
+                                a.finish_turn(stop_reason);
+                            }
+                            c.send(ev)
+                        }
                     }
                 }
             }));
@@ -1283,7 +1384,7 @@ impl AppState {
                 let task = tokio::spawn(async move {
                     tokio::time::sleep(timeout).await;
                     let Some(pe) = ctx2.pending.confirm(id) else { return }; // the UI answered in time
-                    eprintln!("edit {id} was not confirmed by the UI in time; the host writes {}", pe.path);
+                    ctx2.log.write("WARN", &format!("edit {id} was not confirmed by the UI in time; the host writes it"));
                     let ws = ctx2.ws.clone();
                     let (path, new) = (pe.path.clone(), pe.new.clone());
                     let res = tokio::task::spawn_blocking(move || write_atomic(&ws, &path, &new, Some(&stamp))).await;

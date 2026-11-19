@@ -153,3 +153,57 @@ async fn agent_cancel_forgets_edits_waiting_for_the_ui() {
     assert_eq!(st.confirm_edit(id, true, None).unwrap_err().code, "unknown_approval");
     st.shutdown().await;
 }
+
+// ---- Task 14: restart replays history
+
+#[tokio::test]
+async fn transcript_records_only_completed_turns_and_is_bounded() {
+    let (st, _dir, _got) = fixture(60_000).await;
+    let agent = st.ctx().unwrap().agent.clone().unwrap();
+    agent.begin_turn("first question");
+    agent.note_chunk("part one, ");
+    agent.note_chunk("part two");
+    agent.finish_turn("end_turn");
+    agent.begin_turn("cancelled question");
+    agent.note_chunk("partial");
+    agent.finish_turn("cancelled");
+    agent.begin_turn("failed question");
+    agent.finish_turn("error");
+    let h = agent.history_param().unwrap();
+    assert_eq!(h, json!([
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "part one, part two"},
+    ]));
+    for i in 0..100 {
+        agent.begin_turn(&format!("q{i}"));
+        agent.note_chunk("a");
+        agent.finish_turn("end_turn");
+    }
+    let h = agent.history_param().unwrap();
+    let arr = h.as_array().unwrap();
+    assert!(arr.len() <= MAX_TRANSCRIPT_MESSAGES);
+    assert_eq!(arr[0]["role"], "user", "trimming keeps whole pairs");
+    assert_eq!(arr.last().unwrap()["content"], "a");
+}
+
+#[tokio::test]
+async fn agent_restart_replays_history_and_clears_pending() {
+    let (st, _dir, got) = fixture(60_000).await;
+    let ctx = st.ctx().unwrap();
+    let agent = ctx.agent.clone().unwrap();
+    let first = ctx.ensure_session(&agent).await.unwrap();
+    agent.begin_turn("remember this");
+    agent.note_chunk("noted");
+    agent.finish_turn("end_turn");
+    let (id, _, _) = register(&st, "a.txt", "new\n");
+    assert!(!ctx.pending.is_empty());
+    // the supervisor reports a restart: epoch moves on and everything pending is dropped
+    ctx.on_agent_event(&agent, AgentEvent::Restarted { attempt: 1 });
+    assert!(ctx.pending.is_empty(), "approvals of the dead agent are cleared");
+    assert!(st.resolve_approval(id, true).await.is_err(), "a stale approval id is unknown");
+    let second = ctx.ensure_session(&agent).await.unwrap();
+    assert_ne!(first, second, "a fresh session was created for the new epoch");
+    assert!(agent.history_param().is_some(), "history survives for replay");
+    settle().await;
+    assert!(got.lock().unwrap().iter().any(|e| matches!(e, UiEvent::AgentState { state } if state == "restarted")));
+}
