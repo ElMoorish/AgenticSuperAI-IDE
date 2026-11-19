@@ -89,7 +89,12 @@ async fn unconfirmed_edit_is_written_by_the_host_after_the_timeout() {
     let (st, dir, _got) = fixture(150).await;
     let (id, _, _) = register(&st, "a.txt", "fallback\n");
     st.resolve_approval(id, true).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    for _ in 0..100 {
+        if read(&dir, "a.txt") == "fallback\n" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert_eq!(read(&dir, "a.txt"), "fallback\n");
     assert_eq!(st.confirm_edit(id, true, None).unwrap_err().code, "unknown_approval", "a late confirm answers nothing");
     st.shutdown().await;

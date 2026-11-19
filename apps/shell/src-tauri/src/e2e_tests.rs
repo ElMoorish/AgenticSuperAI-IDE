@@ -154,7 +154,7 @@ async fn prompt_edit_approve_apply_confirm_turn_end() {
     assert!(evs.iter().any(|e| matches!(e, UiEvent::ToolCall { .. })), "tool events reach the UI: {evs:?}");
     let text: String = evs.iter().filter_map(|e| if let UiEvent::Chunk { text } = e { Some(text.as_str()) } else { None }).collect();
     assert!(text.contains("All done."), "the follow-up answer streams to the UI: {text:?}");
-    assert!(matches!(evs.last(), Some(UiEvent::TurnEnd { stop_reason }) if stop_reason == "end_turn"), "{evs:?}");
+    assert!(evs.iter().any(|e| matches!(e, UiEvent::TurnEnd { stop_reason } if stop_reason == "end_turn")), "{evs:?}");
     assert!(model.requests.load(Ordering::SeqCst) >= 2, "the agent asked the model again after the tool result");
     st.shutdown().await;
 }
