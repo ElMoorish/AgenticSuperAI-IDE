@@ -9,7 +9,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 /** Must match `tauri::generate_handler!` in main.rs (checked by a test). */
 export const COMMANDS = [
   "pick_folder", "open_folder", "list_dir", "read_file", "save_file", "subscribe_events",
-  "agent_prompt", "agent_cancel", "resolve_approval", "probe_endpoint", "detect_servers",
+  "agent_prompt", "agent_cancel", "resolve_approval", "confirm_edit", "probe_endpoint", "detect_servers",
   "get_settings", "set_settings", "start_user_terminal", "terminal_write", "terminal_resize",
   "close_terminal",
 ] as const;
@@ -79,7 +79,7 @@ export type UiEvent =
   | { type: "toolUpdate"; id: string; status: string; content?: string }
   | { type: "usage"; promptTokens: number; completionTokens: number; tokensPerSecond: number }
   | { type: "approval"; id: number; kind: "edit" | "command"; title: string; old?: string; new?: string; command?: string }
-  | { type: "applyEdit"; id: number; rel: string; newText: string }
+  | { type: "applyEdit"; id: number; rel: string; old: string; newText: string }
   | { type: "agentState"; state: "running" | "crashed" | "restarted" | "gave_up" }
   | { type: "turnEnd"; stopReason: string }
   | { type: "fsChanged"; paths: string[]; overflow: boolean }
@@ -151,6 +151,8 @@ export async function agentPrompt(mode: AgentMode, text: string, onEvent: (ev: U
 export const agentCancel = () => call<void>("agent_cancel");
 /** May reject with "unknown_approval" (stale/replayed id: ignore), "conflict" or "io" (edit write failed). */
 export const resolveApproval = (id: number, accept: boolean) => call<void>("resolve_approval", { id, accept });
+/** Report the outcome of an `applyEdit` event. `unknown_approval` = already answered/timed out: ignore. */
+export const confirmEdit = (id: number, ok: boolean, error?: string) => call<void>("confirm_edit", { id, ok, error: error ?? null });
 export const probeEndpoint = (url: string) => call<ProbeResult>("probe_endpoint", { url });
 export const detectServers = () => call<DetectedServer[]>("detect_servers");
 export const getSettings = () => call<Settings>("get_settings");

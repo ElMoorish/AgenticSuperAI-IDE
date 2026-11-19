@@ -61,4 +61,33 @@ export function createEditor(container: HTMLElement, opts: { theme: string; font
   });
 }
 
+/** Read-only side-by-side diff for reviewing an agent edit. */
+export function createDiffViewer(
+  container: HTMLElement,
+  o: { theme: string; fontSize: number; original: string; modified: string; language: string },
+): { dispose(): void } {
+  setupMonaco();
+  const original = monaco.editor.createModel(o.original, o.language);
+  const modified = monaco.editor.createModel(o.modified, o.language);
+  const ed = monaco.editor.createDiffEditor(container, {
+    theme: o.theme,
+    automaticLayout: true,
+    readOnly: true,
+    originalEditable: false,
+    renderSideBySide: true,
+    fontSize: o.fontSize,
+    fontFamily: '"Spline Sans Mono", Consolas, monospace',
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+  });
+  ed.setModel({ original, modified });
+  return {
+    dispose() {
+      ed.dispose();
+      original.dispose();
+      modified.dispose();
+    },
+  };
+}
+
 export { monaco };

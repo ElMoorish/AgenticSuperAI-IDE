@@ -1,10 +1,13 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { onUiEvent } from "../events";
 import { useStore } from "../state/store";
+import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { Gauges } from "./Gauges";
+import { DiffReview } from "./InlineDiff";
 import { StepList } from "./StepList";
-import { useAgent } from "./agentStore";
+import { handleApplyEdit } from "./applyEdits";
+import { useAgent, type Approval } from "./agentStore";
 import "../styles/agent.css";
 
 const STICK_PX = 48;
@@ -16,7 +19,18 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
   const stick = useRef(true);
 
   // One host subscription is shared by every panel (events.ts); here we only feed the reducer.
-  useEffect(() => onUiEvent((ev) => dispatch(ev)), [dispatch]);
+  useEffect(
+    () =>
+      onUiEvent((ev) => {
+        dispatch(ev);
+        // An accepted edit of an existing file is applied through the editor buffer (undoable).
+        if (ev.type === "applyEdit") void handleApplyEdit(ev);
+      }),
+    [dispatch],
+  );
+  const [reviewing, setReviewing] = useState<Approval | null>(null);
+  // the card may be answered elsewhere (editor banner, replay): close a review of a gone approval
+  const reviewed = reviewing && state.approvals.some((a) => a.id === reviewing.id) ? reviewing : null;
 
   const busy = state.turn !== "idle";
 
@@ -67,15 +81,7 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
         ))}
         <StepList steps={state.steps} />
         {state.approvals.map((a) => (
-          // Task 11 replaces this with the full ApprovalCard (diff, exact command line).
-          <div key={a.id} className="approval" role="group" aria-label={`Approval needed: ${a.title}`}>
-            <b>{a.title}</b>
-            {a.command && <pre className="mono">{a.command}</pre>}
-            <div className="actions">
-              <button type="button" className="primary" onClick={() => void resolve(a.id, true)}>Accept</button>
-              <button type="button" onClick={() => void resolve(a.id, false)}>Reject</button>
-            </div>
-          </div>
+          <ApprovalCard key={a.id} approval={a} onResolve={(ok) => void resolve(a.id, ok)} onReview={setReviewing} />
         ))}
       </div>
       <Composer
@@ -86,6 +92,9 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
         onSend={(t) => void send(t)}
         onStop={() => void cancel()}
       />
+      {reviewed && (
+        <DiffReview approval={reviewed} onClose={() => setReviewing(null)} onResolve={(ok) => void resolve(reviewed.id, ok)} />
+      )}
     </aside>
   );
 }

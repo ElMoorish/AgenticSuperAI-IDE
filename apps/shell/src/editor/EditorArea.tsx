@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { onUiEvent } from "../events";
+import { useAgent } from "../agent/agentStore";
 import { useStore } from "../state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { models, type Buffer } from "./models";
@@ -26,6 +27,8 @@ export function EditorArea() {
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmReload, setConfirmReload] = useState<string | null>(null);
 
+  const approvals = useAgent((s) => s.state.approvals);
+  const resolveApproval = useAgent((s) => s.resolve);
   const active = state.active;
   const buf: Buffer | undefined = active ? state.buffers[active] : undefined;
   const wantsEditor = state.order.some((r) => state.buffers[r]?.status === "ready");
@@ -179,6 +182,15 @@ export function EditorArea() {
         onClose={requestClose}
         onSave={(r) => void saveRel(r)}
       />
+      {approvals
+        .filter((a) => a.kind === "edit" && active !== null && models.resolve(a.title) === models.resolve(active))
+        .map((a) => (
+          <div key={a.id} className="banner warn" role="group" aria-label="Agent edit proposed for this file">
+            <span><b>The agent proposes an edit to {baseName(a.title)}.</b> Review it in the agent panel.</span>
+            <button type="button" onClick={() => void resolveApproval(a.id, true)}>Accept</button>
+            <button type="button" onClick={() => void resolveApproval(a.id, false)}>Reject</button>
+          </div>
+        ))}
       {buf && buf.status === "ready" && buf.conflict === "disk" && (
         <div className="banner warn" role="alert">
           <span><b>{baseName(buf.rel)}</b> changed on disk. Your unsaved edits were kept.</span>

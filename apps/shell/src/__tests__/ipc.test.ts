@@ -31,7 +31,7 @@ describe("ipc", () => {
       { type: "toolUpdate", id: "1", status: "completed" },
       { type: "usage", promptTokens: 1, completionTokens: 2, tokensPerSecond: 3 },
       { type: "approval", id: 1, kind: "command", title: "t", command: "ls" },
-      { type: "applyEdit", id: 2, rel: "a.txt", newText: "x" },
+      { type: "applyEdit", id: 2, rel: "a.txt", old: "o", newText: "x" },
       { type: "agentState", state: "running" },
       { type: "turnEnd", stopReason: "end_turn" },
       { type: "fsChanged", paths: [], overflow: false },
