@@ -126,10 +126,17 @@ pub fn parse_sse_line(line: &str) -> Result<Vec<Delta>, ()> {
     Ok(out)
 }
 
+/// The endpoint may be given with or without a trailing slash or `/v1` (OpenAI-style base URLs
+/// end in `/v1`); the request path appended later already contains `/v1`.
+pub fn normalize_base(raw: &str) -> String {
+    let b = raw.trim().trim_end_matches('/');
+    b.strip_suffix("/v1").unwrap_or(b).trim_end_matches('/').to_string()
+}
+
 impl Provider {
     pub fn from_env() -> Self {
         Self {
-            base: std::env::var("ASA_LLM_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into()),
+            base: normalize_base(&std::env::var("ASA_LLM_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into())),
             model: std::env::var("ASA_LLM_MODEL").unwrap_or_else(|_| "local".into()),
         }
     }
@@ -314,5 +321,18 @@ mod tests {
             Delta::Tool { args: Some(a), .. } => assert_eq!(a, r#"{"a":1}"#),
             d => panic!("{d:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod base_tests {
+    use super::normalize_base;
+
+    #[test]
+    fn endpoint_spellings_all_give_one_v1() {
+        for raw in ["http://localhost:8888", "http://localhost:8888/", "http://localhost:8888/v1", "http://localhost:8888/v1/", " http://localhost:8888/v1 "] {
+            assert_eq!(normalize_base(raw), "http://localhost:8888", "{raw}");
+        }
+        assert_eq!(normalize_base("http://h/proxy/v1"), "http://h/proxy");
     }
 }
