@@ -95,3 +95,19 @@ describe("status bar", () => {
     expect(screen.getByText("6.0 / 8 GB")).toBeTruthy();
   });
 });
+
+describe("emergency stop", () => {
+  it("Ctrl+Alt+Esc cancels the agent turn, even from inside an editor", async () => {
+    const { handleShortcut } = await import("../App");
+    const cancel = vi.fn(async () => {});
+    useAgent.setState({ cancel });
+    const host = document.createElement("div");
+    host.className = "monaco-editor";
+    document.body.appendChild(host);
+    const ev = new KeyboardEvent("keydown", { key: "Escape", ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    host.dispatchEvent(ev);
+    expect(handleShortcut(ev)).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    host.remove();
+  });
+});

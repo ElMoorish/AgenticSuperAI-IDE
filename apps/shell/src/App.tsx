@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import { Shell } from "./layout/Shell";
+import { useAgent } from "./agent/agentStore";
 import { useStore } from "./state/store";
 
-export type ShortcutAction = "zoomIn" | "zoomOut" | "zoomReset" | "toggleFile" | "toggleAgent" | "toggleBottom";
+export type ShortcutAction = "zoomIn" | "zoomOut" | "zoomReset" | "toggleFile" | "toggleAgent" | "toggleBottom" | "stopAgent";
 
 const EDITABLE = "input, textarea, select, [contenteditable=\"\"], [contenteditable=\"true\"], .xterm, .monaco-editor";
 
@@ -10,6 +11,8 @@ const EDITABLE = "input, textarea, select, [contenteditable=\"\"], [contentedita
 export function shortcutAction(e: KeyboardEvent): ShortcutAction | null {
   if (e.defaultPrevented) return null;
   if (e.getModifierState?.("AltGraph")) return null;
+  // Emergency stop works everywhere, including inside the editor and terminals.
+  if (e.key === "Escape" && e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey) return "stopAgent";
   const t = e.target;
   if (t instanceof Element && t.closest(EDITABLE)) return null;
   const mod = e.ctrlKey !== e.metaKey; // exactly one of ctrl/cmd
@@ -31,6 +34,11 @@ export const shouldHandleShortcut = (e: KeyboardEvent): boolean => shortcutActio
 export function handleShortcut(e: KeyboardEvent): boolean {
   const a = shortcutAction(e);
   if (!a) return false;
+  if (a === "stopAgent") {
+    void useAgent.getState().cancel();
+    e.preventDefault();
+    return true;
+  }
   const s = useStore.getState();
   if (a === "zoomIn") s.zoomIn();
   else if (a === "zoomOut") s.zoomOut();
