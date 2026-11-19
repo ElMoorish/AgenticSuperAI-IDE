@@ -111,6 +111,21 @@ the agent's compile and syntax checks failed with "editor does not handle termin
 re-reading the file. Two small tasks on one tiny project, one run each; no repeat spread, no harder tasks, and the
 edit approval UI was not exercised.
 
+**In the real IDE window** (release build, WebView2 driven through its remote-debugging port, same 35B server, a throwaway
+project; the user's settings were backed up and restored afterwards):
+
+| Step | Result |
+|---|---|
+| Settings: endpoint to the local server, no API key | "Connected. 1 model available."; the 35B appeared in the model picker; the title-bar chip updated |
+| Plan mode: "What does this project do?" | Correct answer; `list_dir`, `read_file`, `list_dir`, `read_file` shown with check marks; context 278/16k |
+| Build mode: add a `--lines` option | Edit approval card with the diff and Accept/Reject/side-by-side; after approval the file changed, the editor opened it, a `py_compile` check ran in an "Agent #1" terminal tab, and the agent's summary was correct; the edited program prints words 6 / lines 3 |
+
+Observations, not yet fixed: the answer text shows raw `**bold**` (Markdown is not rendered); tool steps are listed after
+the answer text instead of in order; the status-bar "Speed" read 1.4 to 3.9 tok/s while llama-server logged 11 to 16 tok/s for
+generation (probably the IDE averages over the whole turn including prompt processing; not investigated); the IDE log
+(`asa.log`) has no record of approvals or edits. The approval was resolved before the test driver's click, most likely by the
+user (the window was on their screen); no auto-accept path was found in the code.
+
 ### 3.7 Working conclusions (and their limits)
 1. Decode speed of any streaming approach is bounded by (bytes read per token) / (storage bandwidth). Dense 27B on this machine is
    expected at several seconds per token however well tuned (**estimate**, from 3.1 and 3.2, not measured on a 27B).
