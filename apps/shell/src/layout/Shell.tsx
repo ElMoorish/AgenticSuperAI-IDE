@@ -5,6 +5,7 @@ import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
 import { Splitter } from "./Splitter";
 import { StatusBar } from "./StatusBar";
+import { TerminalPanel } from "../terminal/TerminalPanel";
 import { TitleBar } from "./TitleBar";
 
 /**
@@ -62,8 +63,7 @@ export function Shell() {
         <EditorArea />
         {split("bottom", "Resize bottom panel", "horizontal", -1)}
         <section className={`bottom${collapsed.bottom ? " panel-collapsed" : ""}`} aria-label="Bottom panel">
-          <div className="ptabs"><b>Terminal</b></div>
-          <div className="pbody mono">Terminal and build output will appear here.</div>
+          <TerminalPanel />
         </section>
       </div>
 
