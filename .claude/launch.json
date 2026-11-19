@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "shell-vite", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "apps/shell", "run", "dev"], "port": 1420 }
+  ]
+}

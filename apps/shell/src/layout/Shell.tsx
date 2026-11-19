@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { AgentPanel } from "../agent/AgentPanel";
 import { EditorArea } from "../editor/EditorArea";
 import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
@@ -11,7 +12,7 @@ import { TitleBar } from "./TitleBar";
  *   .side   = file panel      -> Task 9 (file tree)
  *   .ed     = editor area     -> Task 9 (tabs, Monaco)
  *   .bottom = bottom panel    -> Task 12 (terminal, build)
- *   .agent  = agent panel     -> Task 13 (chat, approvals, gauges)
+ *   .agent  = agent panel     -> Task 10 (chat, steps, gauges, composer); Task 11 approval cards
  */
 export function Shell() {
   const { sizes, collapsed } = useStore((s) => s.layout);
@@ -67,21 +68,7 @@ export function Shell() {
       </div>
 
       {split("agent", "Resize agent panel", "vertical", -1)}
-      <aside className={`agent${collapsed.agent ? " panel-collapsed" : ""}`} aria-label="Agent">
-        <div className="ahead">
-          <div className="t"><span>Agent</span></div>
-          <div className="gauge">
-            <div className="lab"><span>Context</span><b className="mono">- / -</b></div>
-            <div className="bar" />
-          </div>
-          <div className="gauge">
-            <div className="lab"><span>GPU memory</span><b className="mono">- / -</b></div>
-            <div className="bar" />
-          </div>
-        </div>
-        <div className="ledger">The agent conversation will appear here.</div>
-        <div className="composer"><div className="box">Ask the agent or give it a task</div></div>
-      </aside>
+      <AgentPanel collapsed={collapsed.agent} />
 
       <StatusBar />
     </div>
