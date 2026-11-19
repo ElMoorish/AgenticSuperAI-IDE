@@ -36,4 +36,4 @@ Then in the IDE: Settings > Model server address = `http://127.0.0.1:8090`. Chec
 * Speed is roughly the compressed model size divided by disk speed, per generated token. Measured: Qwen3.5-4B,
   4-bit, about 1.8 s per token. A 27B is expected to be tens of seconds per token (estimate, not measured).
 * Reasoning ("thinking") is off by default (`--thinking` turns it on).
-* Not tested yet inside the IDE's agent loop.
+* Tested with the IDE agent (plan mode, 4B model): it fell back to text tool calls, listed the folder, read the README and answered correctly in 110 s. Set ASA_READ_TIMEOUT_S/ASA_DEADLINE_S higher for slow models.

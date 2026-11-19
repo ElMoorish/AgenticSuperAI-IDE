@@ -81,6 +81,20 @@ class Engine:
         self.name = name
         self.max_seq_len = max_seq_len
         self.thinking = thinking
+        # Stop on every end-of-turn token: model configs often list only <|endoftext|> while a chat
+        # turn ends with <|im_end|>; without it the model invents further user/assistant turns.
+        ids = [self.tok.eos_token_id, getattr(self.model.config, "eos_token_id", None)]
+        for tok_name in ("<|im_end|>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>"):
+            i = self.tok.convert_tokens_to_ids(tok_name)
+            if isinstance(i, int) and i >= 0 and i != self.tok.unk_token_id:
+                ids.append(i)
+        flat = []
+        for i in ids:
+            for j in (i if isinstance(i, (list, tuple)) else [i]):
+                if j is not None and j not in flat:
+                    flat.append(j)
+        self.eos_ids = flat
+        log(f"stop tokens: {flat}")
         self.lock = threading.Lock()
         self.cache = LayerCache(int(cache_gb * 1024**3)) if cache_gb > 0 else None
         if self.cache:
@@ -121,6 +135,7 @@ class Engine:
         gen_kw = dict(
             inputs=ids.cuda(), max_new_tokens=max_new, use_cache=True, streamer=streamer,
             stopping_criteria=StoppingCriteriaList([Stop()]),
+            eos_token_id=self.eos_ids, pad_token_id=self.eos_ids[0],
         )
         if temperature and temperature > 0:
             gen_kw.update(do_sample=True, temperature=float(temperature), top_p=float(top_p))
@@ -190,6 +205,9 @@ class Handler(BaseHTTPRequestHandler):
             messages = req["messages"]
         except Exception as e:
             return self._err(400, f"bad request: {e}")
+        if req.get("tools"):
+            # No native tool calling here. A 400 makes the IDE agent switch to its text (XML) tool format.
+            return self._err(400, "this server does not support native tools; use text tool calls")
         stream = bool(req.get("stream"))
         max_tokens = int(req.get("max_tokens") or req.get("max_completion_tokens") or 256)
         temp = req.get("temperature", 0)
