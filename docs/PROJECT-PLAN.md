@@ -1,0 +1,140 @@
+# ASA AgenticSuperAI IDE: project plan
+
+A fully local, agentic coding IDE for ordinary hardware (target: Windows 10, 8 GB VRAM GPU, 16 GB RAM).
+This document is the single place to read what exists, what was measured, what is still unknown, and
+what we intend to build and publish. Every number below was measured on one machine (see "Test machine");
+anything not measured is marked **estimate** or **unverified**.
+
+## 1. Problem and goal
+
+Strong open models keep growing, but most developers have a mid-range GPU. Running a 27B+ model on 8 GB of
+VRAM is possible only by moving weights between disk, RAM and GPU, and the speed is then set by bytes read per
+token divided by storage bandwidth, not by compute. We want a coding agent that stays usable on such hardware by
+(a) choosing the right inference backend for the model and machine, and (b) keeping the agent's context small
+and safe.
+
+**Goal:** an open-source IDE whose agent runs entirely on the user's machine, with a backend manager that picks,
+launches and honestly benchmarks local model servers.
+
+**Non-goals (for now):** cloud inference, training, matching frontier-model quality.
+
+## 2. What exists today (shipped in this repository)
+
+| Part | State | Where |
+|---|---|---|
+| IDE shell: Tauri v2 + React, Monaco editor, xterm terminals, settings, command palette, crash recovery, diagnostics | Done, merged to `main`. Tests: Vitest 143 passing; Cargo workspace passing | `apps/shell`, `crates/ide-host` |
+| Agent sidecar (Rust): tool loop (list/find/search/read/edit/compile/shell), plan and build modes, text (XML) and native tool calls, loop guard, edit approval flow | Done | `crates/agent-core` |
+| Any OpenAI-compatible backend (llama.cpp, Unsloth Studio, others) via one address and optional API key | Done | Settings dialog |
+| AirLLM server: OpenAI-compatible wrapper with a cleanup patch and resident-layer option | Done, tested on a 4B model only | `tools/airllm-server`, `config/start-airllm.ps1` |
+| llama.cpp launch and benchmark scripts | Done | `config/`, `scripts/bench-llama-moe.ps1` |
+
+Not verified: the shell running in a real window against a real model for long sessions (checklist in
+`docs/shell-checklist.md`, section 6); the installer (NSIS bundling fails with os error 32 on the test machine).
+
+## 3. Measurements so far
+
+### Test machine
+Windows 10 Pro, RTX 4060 (8 GB), 15.9 GB RAM (about 5 GB free at test time), E: = SK hynix NVMe SSD.
+llama.cpp b12359 (CUDA 12.4). AirLLM 4.0.0, PyTorch 2.6.0+cu124, transformers 5.23, bitsandbytes 0.50.2.
+
+### 3.1 Why layer streaming is slow: where the time goes (AirLLM, Qwen3.5-4B, 4-bit)
+
+| Stage | Result |
+|---|---|
+| Stock BF16 | 12.0 s/token |
+| 4-bit (files compressed on disk) | 8.5 s/token |
+| Per-layer `gc.collect()` + `empty_cache()` (stock `clean_memory`) | 66% of the time |
+| After replacing it with `empty_cache()` only | 1.6 s/token (4.8x faster) |
+| After that fix, layer reads | about 80% of the remaining time; about 1.3 GB/s effective |
+| Sequential read of E: (mostly cold) | 1.5 GB/s |
+| Pinned RAM to GPU copy (PCIe) | 11.7 GB/s |
+
+### 3.2 Keeping layers resident on the GPU (`--vram-gb`)
+
+AirLLM's 4-bit mode shrinks files on disk only; on the GPU a layer is expanded to 16-bit, so the budget is counted
+at the expanded size.
+
+| Resident VRAM | Layers kept (of 33) | Speed |
+|---|---|---|
+| 0 GB | 0 | 1.65 s/token |
+| 2 GB | 10 | 1.1 s/token |
+| 4 GB | 20 | 0.66 s/token |
+
+### 3.3 MoE expert offload in llama.cpp (OLMoE-1B-7B Q4_K_M, 3.92 GiB, 1.7B active parameters)
+
+| Configuration | Prompt (pp128) tok/s | Generation (tg32) tok/s |
+|---|---|---|
+| All on GPU | 3684 (high variance, +/- 1783) | 247 |
+| Experts on CPU, attention on GPU (`-ncmoe 99`) | 214 | 36 |
+| Half the expert layers on CPU (`-ncmoe 8`) | 399 | 63 |
+| CPU only (`-ngl 0`, CUDA build) | 204 | 29 |
+
+Caveats: the model fits in RAM, so this measures offload behaviour, **not SSD streaming**; it is a 2024 model, so
+nothing here says anything about coding quality; 3 repeats per cell.
+
+### 3.4 End-to-end agent check
+The agent (plan mode) ran against the AirLLM server with the 4B model: fell back to text tool calls, listed the
+folder, read the README and answered correctly (3 model calls, 110 s). One easy task, one model.
+
+### 3.5 Working conclusions (and their limits)
+1. Decode speed of any streaming approach is bounded by (bytes read per token) / (storage bandwidth). Dense 27B on this machine is
+   expected at several seconds per token however well tuned (**estimate**, from 3.1 and 3.2, not measured on a 27B).
+2. The way past the bound is to read fewer bytes per token: mixture-of-experts models with expert-aware offload.
+   Measured only on a small model that fits in RAM (3.3); the bigger-than-RAM case is still to be measured.
+3. Keeping part of the model resident on the GPU gives a gain proportional to the share kept (3.2).
+
+## 4. Roadmap
+
+Each phase needs its own short design before code (the repository convention).
+
+| Phase | Deliverable | Done when |
+|---|---|---|
+| P1 | **Real-window verification** of the shell with a real model | `docs/shell-checklist.md` section 6 fully ticked |
+| P2 | **MoE beyond RAM**: measure a model larger than free RAM (for example a 35B-A3B at Q4) with llama.cpp expert offload; if an SSD-streaming fork is stable, measure it too | Table like 3.3 for a model larger than RAM, with a cold-cache procedure |
+| P3 | **Build/run with context-safe digests**: compile C++ and run apps, return short summaries instead of raw logs | Agent fixes a failing build in a sample repo without exceeding a set context budget |
+| P4 | **Model manager**: detect VRAM, RAM and disk speed; recommend backend and quantization; download to a chosen drive; start and stop servers; show a measured speed estimate before large downloads | Fresh machine: pick a model, get a working endpoint, estimate within a stated error of the measured speed |
+| P5 | **AirLLM improvements** worth upstreaming: cleanup patch (4.8x), resident layers, keep-4-bit-on-GPU (untested), prefetch with compression | Reproducible benchmark and a pull request or a documented fork |
+| P6 | **Desktop control** of any application with context-safe output | Separate design |
+| P7 | Installer and release | NSIS bundle builds; signed or documented SmartScreen note |
+
+Open questions: does AirLLM expert streaming work for Qwen3.5-MoE (it needs a per-model setting that was not found)?
+Can weights stay 4-bit on the GPU in AirLLM? Which SSD-streaming llama.cpp forks are stable enough to depend on?
+
+## 5. Publishing plan
+
+### 5.1 GitHub launch checklist
+- [ ] Choose a license and add `LICENSE` (decision for the owner).
+- [ ] README: one-paragraph pitch, a screenshot or short clip (needs P1), quick start, hardware requirements, honest limits.
+- [ ] `docs/`: this plan, the shell checklist, a `BENCHMARKS.md` with scripts and raw outputs for every table above.
+- [ ] Reproducibility: pin versions (Section 3 test machine), one command per table, state cold or warm cache.
+- [ ] CI: Cargo tests and Vitest on push (flaky terminal tests listed as known issue first).
+- [ ] Issue templates; a "known gaps" list copied from the checklist.
+- [ ] Release: a tagged build only after P1 and P7.
+
+### 5.2 arXiv paper: candidate framing
+Working title: *Local agentic coding on 8 GB GPUs: where streaming inference spends its time, and what to do about it.*
+
+Candidate contributions, each only if the evidence exists when we write:
+1. A per-stage profile of layer-streaming inference showing the bytes-per-token / bandwidth bound (3.1). **Evidence exists** (one 4B model, one machine).
+2. A bug-level finding: a per-layer garbage-collection call dominating AirLLM's 4-bit runtime, and the fix (4.8x). **Evidence exists**; needs a second model and machine to avoid "one setup" criticism.
+3. Resident-layer budgeting counted at expanded size, with measured scaling (3.2). **Evidence exists** (4B).
+4. A comparison of dense layer streaming and MoE expert offload on the same hardware. **Not yet**: needs P2 with models larger than RAM.
+5. A backend-selection method for the model manager. **Not yet**: needs P4.
+
+Method requirements before submission: at least two models per backend, cold-cache protocol, 5+ repeats with spread,
+fixed prompts, quality check on a small coding benchmark (otherwise speed numbers say nothing about usefulness),
+and a related-work section covering AirLLM, llama.cpp expert offload and the SSD-streaming forks, with citations
+checked by hand (several fork READMEs we saw are self-reported or AI-written; do not cite their numbers as fact).
+
+Suggested outline: Introduction; Background (layer streaming, MoE offload); Setup; Profiling results; Optimizations;
+MoE offload comparison; Agent integration and a small end-to-end task study; Limitations; Related work; Conclusion.
+
+## 6. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Single-machine results | Repeat on a second GPU/disk before any claim in a paper |
+| Speed claims without quality checks | Add a small coding benchmark to every comparison |
+| Dependence on experimental forks | Treat them as optional backends; keep stock llama.cpp as the default |
+| Small local models fumble tool calls (seen with 9B and 4B) | Model manager recommends a coder-tuned model; keep text tool fallback and loop guard |
+| Windows-specific issues (installer, antivirus locks) | Document; test the installer on a clean VM |
