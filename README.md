@@ -8,6 +8,8 @@ Design: `docs/Merged Local Agentic IDE Architecture.docx` (merges the two earlie
 | Path | What |
 |---|---|
 | `crates/agent-core` | Rust agent. ACP-style JSON-RPC over stdio. Modules: `agent` (Plan/Build modes), `repair` (tool-call repair), `loopguard` (loop breaker), `budget` (VRAM pre-flight), `provider` (llama-server client) |
+| `crates/ide-host` | Tauri-free host library: workspace sandbox, atomic file writes, agent supervisor, terminals, watcher, settings, recovery, log |
+| `apps/shell` | The IDE: Tauri v2 + React + Monaco + xterm. `src-tauri` is the thin command layer, `src` the UI |
 | `extension/` | Thin VS Code extension that spawns the agent (Phase 1 shell; Tauri shell comes later) |
 | `config/` | Runtime launch scripts (llama-server flags for 8 GB) |
 | `docs/` | Source architecture documents |
@@ -40,3 +42,16 @@ Live suite: `python scripts/live.py [model] [url]` runs 11 scenarios (compile er
 rename refactor, borrow checker, 250-line file, Plan-mode no-edit, prompt injection) with real cargo and objective pass/fail checks.
 Env: `ONLY=a,b`, `TRIALS=n`, `VERBOSE=1`. The harness approves edits but refuses command prompts, like a careful user.
 Not yet: LSP diagnostics (the check is a full project compile, not incremental), baseline-vs-new error diffing, LSP, code index, broker, expert-paging tier (spike only, see spec section 7).
+
+
+## IDE shell
+
+```bash
+cd apps/shell && npm install
+npm run tauri dev               # run the IDE (needs Rust and WebView2)
+npm test                        # UI tests
+cargo test --workspace          # host, agent and end-to-end tests (scripted model, real agent process)
+cargo build -p agent-core --release && cd apps/shell && npm run tauri build   # installer (NSIS)
+```
+
+Manual verification on a real machine and model: `docs/shell-checklist.md`.
