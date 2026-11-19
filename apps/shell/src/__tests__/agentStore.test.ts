@@ -18,7 +18,7 @@ describe("reduceAgent", () => {
       { type: "promptSent", text: "fix it" },
       { type: "toolCall", id: "t1", title: "read_file main.cpp", kind: "read", status: "pending" },
     ]);
-    expect(s.steps).toEqual([{ id: "t1", title: "read_file main.cpp", kind: "read", status: "todo" }]);
+    expect(s.steps).toEqual([{ id: "t1", title: "read_file main.cpp", kind: "read", status: "todo", seq: 2 }]);
     s = reduceAgent(s, { type: "toolUpdate", id: "t1", status: "in_progress" });
     expect(s.steps[0].status).toBe("run");
     s = reduceAgent(s, { type: "toolUpdate", id: "t1", status: "completed", content: "ok" });
@@ -97,7 +97,7 @@ describe("reduceAgent", () => {
     expect(s.messages.at(-1)?.text).toBe("a");
   });
 
-  it("chunks stream into one assistant message per turn; a prompt adds the user message and clears the old steps", () => {
+  it("chunks stream into one assistant message per turn; a prompt adds the user message and keeps the earlier steps", () => {
     let s = run([
       { type: "promptSent", text: "hello" },
       { type: "chunk", text: "Hel" },
@@ -110,11 +110,31 @@ describe("reduceAgent", () => {
       { type: "turnEnd", stopReason: "end_turn" },
       { type: "promptSent", text: "again" },
     ], s);
-    expect(s.steps).toEqual([]);
+    expect(s.steps).toHaveLength(1); // earlier steps stay in the conversation
     expect(s.messages.at(-1)).toMatchObject({ role: "user", text: "again" });
     // a chunk after a new prompt starts a NEW assistant message
     s = reduceAgent(s, { type: "chunk", text: "ok" });
     expect(s.messages.at(-1)).toMatchObject({ role: "assistant", text: "ok" });
+  });
+
+  it("steps and messages share one arrival order, and a restarted agent reusing tool ids does not overwrite old steps", () => {
+    let s = run([
+      { type: "promptSent", text: "q1" },
+      { type: "chunk", text: "looking" },
+      { type: "toolCall", id: "tc1", title: "list_dir .", kind: "read", status: "completed" },
+      { type: "chunk", text: "done" },
+      { type: "turnEnd", stopReason: "end_turn" },
+    ]);
+    const order = [...s.messages.map((m) => m.id), ...s.steps.map((x) => x.seq)].sort((a, b) => a - b);
+    expect(new Set(order).size).toBe(order.length); // no two items share a sequence number
+    expect(s.steps[0].seq).toBeGreaterThan(s.messages[1].id); // the step came after "looking"
+    expect(s.steps[0].seq).toBeLessThan(s.messages[2].id); // and before the text that followed it
+    // new turn, the agent restarted so it uses "tc1" again: this is a new step
+    s = run([
+      { type: "promptSent", text: "q2" },
+      { type: "toolCall", id: "tc1", title: "read_file a.py", kind: "read", status: "pending" },
+    ], s);
+    expect(s.steps.map((x) => x.title)).toEqual(["list_dir .", "read_file a.py"]);
   });
 
   it("turnEnd finishes running steps and explains cancelled or failed turns", () => {

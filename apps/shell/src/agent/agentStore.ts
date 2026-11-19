@@ -21,6 +21,8 @@ import { dispatchUiEvent } from "../events";
 export const MAX_DETAIL_CHARS = 2000;
 export const MAX_MESSAGE_CHARS = 100_000;
 export const MAX_MESSAGES = 200;
+/** Tool steps kept for the whole conversation (they interleave with messages); the oldest go first. */
+export const MAX_STEPS = 400;
 /** Default model context window until the settings UI (Task 13) provides one. */
 export const DEFAULT_CONTEXT_TOKENS = 16384;
 
@@ -30,6 +32,8 @@ export interface Step {
   title: string;
   kind: string;
   status: StepStatus;
+  /** Arrival order, from the same counter as message ids, so the chat can interleave steps and messages. */
+  seq: number;
   detail?: string;
   /** The detail was cut to MAX_DETAIL_CHARS. */
   truncated?: boolean;
@@ -56,6 +60,8 @@ export interface AgentState {
   /** The last message is the assistant message of the turn in progress (chunks append to it). */
   streaming: boolean;
   nextId: number;
+  /** First sequence number of the turn in progress; tool ids are only matched within it. */
+  turnStart: number;
 }
 
 /** UiEvents plus the actions that only exist inside the webview. */
@@ -76,6 +82,7 @@ export const initialAgentState = (): AgentState => ({
   approvals: [],
   streaming: false,
   nextId: 1,
+  turnStart: 1,
 });
 
 const STATUS: Record<string, StepStatus> = { pending: "todo", in_progress: "run", completed: "done", failed: "failed" };
@@ -111,7 +118,7 @@ export function reduceAgent(s: AgentState, ev: AgentAction): AgentState {
   switch (ev.type) {
     case "promptSent": {
       const next = pushMessage(s, "user", ev.text);
-      return { ...next, turn: "running", steps: [], approvals: [], banner: undefined, streaming: false };
+      return { ...next, turn: "running", approvals: [], banner: undefined, streaming: false, turnStart: next.nextId };
     }
     case "chunk": {
       const last = s.messages[s.messages.length - 1];
@@ -130,15 +137,20 @@ export function reduceAgent(s: AgentState, ev: AgentAction): AgentState {
       return { ...pushMessage(s, "assistant", ev.text), streaming: true };
     }
     case "toolCall": {
-      const step: Step = { id: ev.id, title: ev.title, kind: ev.kind, status: stepStatus(ev.status), ...cut(ev.content) };
-      const i = s.steps.findIndex((x) => x.id === ev.id);
-      if (i < 0) return { ...s, steps: [...s.steps, step], streaming: false };
+      const i = s.steps.findIndex((x) => x.id === ev.id && x.seq >= s.turnStart);
+      if (i < 0) {
+        // Tool ids restart every session ("tc1"...), so an id seen in an earlier turn is a new step now.
+        const step: Step = { id: ev.id, title: ev.title, kind: ev.kind, status: stepStatus(ev.status), seq: s.nextId, ...cut(ev.content) };
+        let steps = [...s.steps, step];
+        if (steps.length > MAX_STEPS) steps = steps.slice(steps.length - MAX_STEPS);
+        return { ...s, steps, streaming: false, nextId: s.nextId + 1 };
+      }
       const steps = s.steps.slice();
-      steps[i] = { ...steps[i], ...step };
+      steps[i] = { ...steps[i], title: ev.title, kind: ev.kind, status: stepStatus(ev.status), ...cut(ev.content) };
       return { ...s, steps };
     }
     case "toolUpdate": {
-      const i = s.steps.findIndex((x) => x.id === ev.id);
+      const i = s.steps.findIndex((x) => x.id === ev.id && x.seq >= s.turnStart);
       if (i < 0) return s;
       const steps = s.steps.slice();
       steps[i] = { ...steps[i], status: stepStatus(ev.status), ...(ev.content !== undefined ? cut(ev.content) : {}) };

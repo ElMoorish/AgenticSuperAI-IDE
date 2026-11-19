@@ -126,6 +126,26 @@ pub fn parse_sse_line(line: &str) -> Result<Vec<Delta>, ()> {
     Ok(out)
 }
 
+/// True if this SSE line carries the first piece of generated output of any kind (visible text, hidden
+/// reasoning, or a tool call). Prompt processing ends there, so generation speed is measured from it.
+pub fn carries_generation(line: &str) -> bool {
+    let Some(data) = line.strip_prefix("data:") else { return false };
+    let Ok(v) = serde_json::from_str::<Value>(data.trim()) else { return false };
+    let d = &v["choices"][0]["delta"];
+    let text = |k: &str| d[k].as_str().is_some_and(|s| !s.is_empty());
+    text("content") || text("reasoning_content") || text("reasoning") || d["tool_calls"].as_array().is_some_and(|a| !a.is_empty())
+}
+
+/// Tokens per second of generation. `window` is the time from the first generated piece to the end;
+/// when it is too short to measure (a one-shot reply), fall back to the whole request time.
+pub fn generation_speed(completion: u64, window: Option<f64>, total: f64) -> f64 {
+    match window {
+        Some(w) if w >= 0.2 && completion > 1 => (completion - 1) as f64 / w,
+        _ if total > 0.0 => completion as f64 / total,
+        _ => 0.0,
+    }
+}
+
 /// The endpoint may be given with or without a trailing slash or `/v1` (OpenAI-style base URLs
 /// end in `/v1`); the request path appended later already contains `/v1`.
 pub fn normalize_base(raw: &str) -> String {
@@ -188,6 +208,7 @@ impl Provider {
         let mut calls: BTreeMap<usize, ToolCallOut> = BTreeMap::new();
         let mut streamed_chars = 0usize;
         let mut reported: Option<Usage> = None;
+        let mut first_gen: Option<Instant> = None;
         'stream: loop {
             if cancel.load(Ordering::SeqCst) {
                 done.aborted = Some("cancelled".into());
@@ -209,6 +230,9 @@ impl Provider {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
+            if first_gen.is_none() && carries_generation(&line) {
+                first_gen = Some(Instant::now());
+            }
             let Ok(deltas) = parse_sse_line(&line) else { break };
             for d in deltas {
                 match d {
@@ -249,8 +273,7 @@ impl Provider {
             }
         }
         let usage = reported.unwrap_or(Usage { prompt: estimate_prompt_tokens(messages), completion: estimate_tokens(streamed_chars) });
-        let secs = started.elapsed().as_secs_f64();
-        done.tokens_per_second = if secs > 0.0 { usage.completion as f64 / secs } else { 0.0 };
+        done.tokens_per_second = generation_speed(usage.completion, first_gen.map(|t| t.elapsed().as_secs_f64()), started.elapsed().as_secs_f64());
         done.usage = Some(usage);
         Ok(done)
     }
@@ -321,6 +344,33 @@ mod tests {
             Delta::Tool { args: Some(a), .. } => assert_eq!(a, r#"{"a":1}"#),
             d => panic!("{d:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::{carries_generation, generation_speed};
+
+    #[test]
+    fn generation_starts_at_the_first_piece_of_output_of_any_kind() {
+        assert!(carries_generation(r#"data: {"choices":[{"delta":{"content":"Hi"}}]}"#));
+        assert!(carries_generation(r#"data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}"#));
+        assert!(carries_generation(r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}"#));
+        // the opening role-only chunk, keep-alives and [DONE] are not generation
+        assert!(!carries_generation(r#"data: {"choices":[{"delta":{"role":"assistant","content":""}}]}"#));
+        assert!(!carries_generation(": keep-alive"));
+        assert!(!carries_generation("data: [DONE]"));
+    }
+
+    #[test]
+    fn speed_excludes_prompt_processing() {
+        // 100 tokens, 60 s of prompt processing, then 10 s of generation: ~9.9 tok/s, not 100/70
+        let v = generation_speed(100, Some(10.0), 70.0);
+        assert!((v - 9.9).abs() < 0.01, "{v}");
+        // a reply too short to time falls back to the whole request time
+        assert!((generation_speed(20, Some(0.05), 4.0) - 5.0).abs() < 1e-9);
+        assert!((generation_speed(20, None, 4.0) - 5.0).abs() < 1e-9);
+        assert_eq!(generation_speed(0, None, 0.0), 0.0);
     }
 }
 

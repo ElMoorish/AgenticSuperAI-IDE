@@ -120,10 +120,11 @@ project; the user's settings were backed up and restored afterwards):
 | Plan mode: "What does this project do?" | Correct answer; `list_dir`, `read_file`, `list_dir`, `read_file` shown with check marks; context 278/16k |
 | Build mode: add a `--lines` option | Edit approval card with the diff and Accept/Reject/side-by-side; after approval the file changed, the editor opened it, a `py_compile` check ran in an "Agent #1" terminal tab, and the agent's summary was correct; the edited program prints words 6 / lines 3 |
 
-Observations, not yet fixed: the answer text shows raw `**bold**` (Markdown is not rendered); tool steps are listed after
-the answer text instead of in order; the status-bar "Speed" read 1.4 to 3.9 tok/s while llama-server logged 11 to 16 tok/s for
-generation (probably the IDE averages over the whole turn including prompt processing; not investigated); the IDE log
-(`asa.log`) has no record of approvals or edits. The approval was resolved before the test driver's click, most likely by the
+Observations, fixed afterwards (unit-tested; not yet re-checked in the real window): the answer text showed raw `**bold**`
+(a small safe Markdown renderer now handles code, headings, lists, bold, italic); tool steps were listed after the answer text
+(the chat is now one timeline in arrival order); the status-bar "Speed" read 1.4 to 3.9 tok/s while llama-server logged 11 to
+16 tok/s (it averaged over the whole turn including prompt processing; the agent now times from the first generated token).
+Still open: the IDE log (`asa.log`) has no record of approvals or edits. The approval was resolved before the test driver's click, most likely by the
 user (the window was on their screen); no auto-accept path was found in the code.
 
 ### 3.7 Working conclusions (and their limits)

@@ -7,10 +7,32 @@ import { Gauges } from "./Gauges";
 import { DiffReview } from "./InlineDiff";
 import { StepList } from "./StepList";
 import { handleApplyEdit } from "./applyEdits";
-import { useAgent, type Approval } from "./agentStore";
+import { Markdown } from "./Markdown";
+import { useAgent, type Approval, type Message, type Step } from "./agentStore";
 import "../styles/agent.css";
 
 const STICK_PX = 48;
+
+type TimelineItem = { kind: "msg"; msg: Message } | { kind: "steps"; steps: Step[] };
+
+/** Messages and tool steps in the order they happened; consecutive steps share one list. */
+export function timeline(messages: Message[], steps: Step[]): TimelineItem[] {
+  const out: TimelineItem[] = [];
+  let mi = 0;
+  let si = 0;
+  while (mi < messages.length || si < steps.length) {
+    const takeStep = si < steps.length && (mi >= messages.length || steps[si].seq < messages[mi].id);
+    if (takeStep) {
+      const last = out[out.length - 1];
+      if (last?.kind === "steps") last.steps.push(steps[si]);
+      else out.push({ kind: "steps", steps: [steps[si]] });
+      si++;
+    } else {
+      out.push({ kind: "msg", msg: messages[mi++] });
+    }
+  }
+  return out;
+}
 
 export function AgentPanel({ collapsed }: { collapsed: boolean }) {
   const { state, contextSize, mode, dispatch, setMode, send, cancel, resolve } = useAgent();
@@ -72,14 +94,17 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
             {hasWorkspace ? "Ask the agent to explain, fix or build something in this folder." : "Open a folder to start working with the agent."}
           </p>
         )}
-        {state.messages.map((m) => (
-          <div key={m.id} className={`msg ${m.role}`}>
-            {m.role === "user" && <span className="who">You</span>}
-            {m.trimmed && <em className="trimmed">Earlier output is not shown.</em>}
-            <div className="text">{m.text}</div>
-          </div>
-        ))}
-        <StepList steps={state.steps} />
+        {timeline(state.messages, state.steps).map((item) =>
+          item.kind === "steps" ? (
+            <StepList key={`s${item.steps[0].seq}`} steps={item.steps} />
+          ) : (
+            <div key={item.msg.id} className={`msg ${item.msg.role}`}>
+              {item.msg.role === "user" && <span className="who">You</span>}
+              {item.msg.trimmed && <em className="trimmed">Earlier output is not shown.</em>}
+              {item.msg.role === "assistant" ? <Markdown text={item.msg.text} /> : <div className="text">{item.msg.text}</div>}
+            </div>
+          ),
+        )}
         {state.approvals.map((a) => (
           <ApprovalCard key={a.id} approval={a} onResolve={(ok) => void resolve(a.id, ok)} onReview={setReviewing} />
         ))}
