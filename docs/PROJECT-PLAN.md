@@ -72,15 +72,37 @@ at the expanded size.
 Caveats: the model fits in RAM, so this measures offload behaviour, **not SSD streaming**; it is a 2024 model, so
 nothing here says anything about coding quality; 3 repeats per cell.
 
-### 3.4 End-to-end agent check
+### 3.4 MoE expert offload beyond RAM (Qwen3.5-35B-A3B, UD-IQ4_XS, 16.28 GiB, 3B active parameters)
+
+The file is larger than the free RAM (about 5 GB), so experts are paged from the SSD. `llama-bench`, 2 repeats.
+
+| Configuration | Prompt (pp128) tok/s | Generation (tg32) tok/s |
+|---|---|---|
+| All experts on CPU/SSD (`-ncmoe 99`) | 12.0 +/- 1.2 | 8.95 +/- 2.40 |
+| 32 expert layers on CPU (`-ncmoe 32`) | 20.9 +/- 9.9 | 16.7 +/- 0.4 |
+| 26 expert layers on CPU (`-ncmoe 26`) | 28.1 +/- 14.6 | 15.5 +/- 1.8 |
+
+Caveats: 2 repeats and large spread (page-cache state differed between runs); prompt processing is slow, which
+matters for an agent whose system prompt is about 1,000 tokens; no quality or coding evaluation was done.
+For scale, the dense 4B through AirLLM (3.2) ran at 0.6 to 1.6 s per token, but the models differ in size and quality.
+
+### 3.5 Vision check (same model, `--mmproj mmproj-F16.gguf`, llama-server, `-ncmoe 32`)
+`scripts/vision-check.py` sends a generated image of three colored blocks. The model answered "Red, Green, Blue"
+(correct order) in 1.7 s. With thinking enabled (the server default for this model), 60 `max_tokens` were
+consumed by hidden reasoning and the visible answer was empty, so clients must either allow enough tokens or send
+`chat_template_kwargs: {"enable_thinking": false}`. One synthetic image only; this is a smoke test, not an evaluation.
+The IDE itself cannot send images yet (no image content blocks in the agent protocol or the chat UI).
+
+### 3.6 End-to-end agent check
 The agent (plan mode) ran against the AirLLM server with the 4B model: fell back to text tool calls, listed the
 folder, read the README and answered correctly (3 model calls, 110 s). One easy task, one model.
 
-### 3.5 Working conclusions (and their limits)
+### 3.7 Working conclusions (and their limits)
 1. Decode speed of any streaming approach is bounded by (bytes read per token) / (storage bandwidth). Dense 27B on this machine is
    expected at several seconds per token however well tuned (**estimate**, from 3.1 and 3.2, not measured on a 27B).
 2. The way past the bound is to read fewer bytes per token: mixture-of-experts models with expert-aware offload.
-   Measured only on a small model that fits in RAM (3.3); the bigger-than-RAM case is still to be measured.
+   Measured on a small model that fits in RAM (3.3) and on a 35B-A3B larger than RAM (3.4): 9 to 17 tok/s generation
+   with llama.cpp offload, versus about 1 to 2 tok/s for a dense 4B through AirLLM (different models).
 3. Keeping part of the model resident on the GPU gives a gain proportional to the share kept (3.2).
 
 ## 4. Roadmap
@@ -90,7 +112,8 @@ Each phase needs its own short design before code (the repository convention).
 | Phase | Deliverable | Done when |
 |---|---|---|
 | P1 | **Real-window verification** of the shell with a real model | `docs/shell-checklist.md` section 6 fully ticked |
-| P2 | **MoE beyond RAM**: measure a model larger than free RAM (for example a 35B-A3B at Q4) with llama.cpp expert offload; if an SSD-streaming fork is stable, measure it too | Table like 3.3 for a model larger than RAM, with a cold-cache procedure |
+| P2 | **MoE beyond RAM**: llama.cpp expert offload measured on a 35B-A3B (3.4); remaining: cold-cache protocol, more repeats, a coding-quality check, and an SSD-streaming fork if stable | Table 3.4 with a cold-cache procedure and a quality check |
+| P2b | **Vision in the IDE**: image attach/paste in chat, image blocks in the agent protocol, `image_url` parts to the server (llama-server needs `--mmproj`) | Ask a question about a pasted screenshot in the IDE and get a correct answer |
 | P3 | **Build/run with context-safe digests**: compile C++ and run apps, return short summaries instead of raw logs | Agent fixes a failing build in a sample repo without exceeding a set context budget |
 | P4 | **Model manager**: detect VRAM, RAM and disk speed; recommend backend and quantization; download to a chosen drive; start and stop servers; show a measured speed estimate before large downloads | Fresh machine: pick a model, get a working endpoint, estimate within a stated error of the measured speed |
 | P5 | **AirLLM improvements** worth upstreaming: cleanup patch (4.8x), resident layers, keep-4-bit-on-GPU (untested), prefetch with compression | Reproducible benchmark and a pull request or a documented fork |
