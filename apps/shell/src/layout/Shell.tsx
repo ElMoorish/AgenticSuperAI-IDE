@@ -5,6 +5,8 @@ import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
 import { Splitter } from "./Splitter";
 import { StatusBar } from "./StatusBar";
+import { SettingsDialog } from "../settings/SettingsDialog";
+import { useSettingsDialog } from "../settings/dialogStore";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { TitleBar } from "./TitleBar";
 
@@ -43,6 +45,9 @@ export function Shell() {
     />
   );
 
+  const settingsOpen = useSettingsDialog((s) => s.isOpen);
+  const closeSettings = useSettingsDialog((s) => s.close);
+
   return (
     <div className="ide" style={style}>
       <TitleBar />
@@ -50,7 +55,7 @@ export function Shell() {
       <nav className="rail" aria-label="Activity bar">
         <button type="button" aria-label="Explorer" aria-pressed={!collapsed.filePanel} title="Explorer (Ctrl+B)" onClick={() => toggle("filePanel")}>&#9636;</button>
         <button type="button" aria-label="Search" title="Search (coming later)" disabled>&#8981;</button>
-        <button type="button" aria-label="Settings" title="Settings (coming later)" disabled>&#9881;</button>
+        <button type="button" aria-label="Settings" title="Settings" onClick={() => useSettingsDialog.getState().open()}>&#9881;</button>
         <button type="button" aria-label="Run" title="Run (coming later)" disabled>&#9662;</button>
       </nav>
 
@@ -71,6 +76,7 @@ export function Shell() {
       <AgentPanel collapsed={collapsed.agent} />
 
       <StatusBar />
+      {settingsOpen && <SettingsDialog onClose={closeSettings} />}
     </div>
   );
 }

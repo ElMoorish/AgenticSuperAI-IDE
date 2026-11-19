@@ -220,12 +220,24 @@ export function contextBreakdown(s: AgentState, total: number): ContextBreakdown
 }
 
 // ---- zustand store ----
+export const CONTEXT_KEY = "asa.contextSize";
+export const clampContext = (n: number): number =>
+  Number.isFinite(n) ? Math.min(1_048_576, Math.max(2048, Math.round(n))) : DEFAULT_CONTEXT_TOKENS;
+function loadContextSize(): number {
+  try {
+    const raw = localStorage.getItem(CONTEXT_KEY);
+    if (raw !== null) return clampContext(Number(raw));
+  } catch { /* ignore */ }
+  return DEFAULT_CONTEXT_TOKENS;
+}
+
 interface AgentStore {
   state: AgentState;
   contextSize: number;
   mode: AgentMode;
   dispatch: (a: AgentAction) => void;
   setMode: (m: AgentMode) => void;
+  setContextSize: (n: number) => void;
   send: (text: string) => Promise<void>;
   cancel: () => Promise<void>;
   resolve: (id: number, accept: boolean) => Promise<void>;
@@ -233,13 +245,18 @@ interface AgentStore {
 
 export const useAgent = create<AgentStore>((set, get) => ({
   state: initialAgentState(),
-  contextSize: DEFAULT_CONTEXT_TOKENS,
+  contextSize: loadContextSize(),
   mode: "build",
   dispatch: (a) => set((st) => {
     const next = reduceAgent(st.state, a);
     return next === st.state ? st : { state: next };
   }),
   setMode: (mode) => set({ mode }),
+  setContextSize: (n) => {
+    const v = clampContext(n);
+    set({ contextSize: v });
+    try { localStorage.setItem(CONTEXT_KEY, String(v)); } catch { /* ignore */ }
+  },
   send: async (text) => {
     const t = text.trim();
     const { state, dispatch, mode } = get();
