@@ -316,10 +316,15 @@ impl Session {
                 let blocks = diff::parse_blocks(diff_text)?;
                 let old = io.call("fs/read_text_file", json!({"sessionId": self.id, "path": abs}))?;
                 let new = diff::apply(old["content"].as_str().unwrap_or_default(), &blocks)?;
-                if !self.ask(io, &format!("Edit {path}"), diff_text, "Allow edit")? {
-                    return Ok("The user rejected this edit. Ask what they want instead.".into());
+                // No separate permission prompt: the editor's approval of this write (with the real
+                // old/new diff) is the user's decision. Asking twice showed a raw-diff "command" card.
+                match io.call("fs/write_text_file", json!({"sessionId": self.id, "path": abs, "content": new})) {
+                    Ok(_) => {}
+                    Err(e) if e.contains("rejected by the user") => {
+                        return Ok("The user rejected this edit. Ask what they want instead.".into());
+                    }
+                    Err(e) => return Err(e),
                 }
-                io.call("fs/write_text_file", json!({"sessionId": self.id, "path": abs, "content": new}))?;
                 let report = self.post_edit_report(io, path, &abs, &new);
                 Ok(format!("applied {} block(s) to {path}{report}", blocks.len()))
             }

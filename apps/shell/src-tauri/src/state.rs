@@ -2159,3 +2159,7 @@ mod tests {
 #[cfg(test)]
 #[path = "state_edit_tests.rs"]
 mod edit_tests;
+
+#[cfg(test)]
+#[path = "e2e_tests.rs"]
+mod e2e_tests;
