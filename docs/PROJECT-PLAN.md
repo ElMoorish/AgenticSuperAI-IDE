@@ -97,6 +97,20 @@ The IDE itself cannot send images yet (no image content blocks in the agent prot
 The agent (plan mode) ran against the AirLLM server with the 4B model: fell back to text tool calls, listed the
 folder, read the README and answered correctly (3 model calls, 110 s). One easy task, one model.
 
+Same check with the Qwen3.5-35B-A3B (UD-IQ4_XS) on llama-server (`-ncmoe 32`, `-c 16384`, `--jinja`), using the
+IDE agent's native tool calls (no fallback needed):
+
+| Task | Mode | Result | Time |
+|---|---|---|---|
+| "What does this project do?" | plan | `list_dir`, `read_file`, `list_dir src`, correct answer | 110 s |
+| "Add a `--lines` option to `src/main.py`" | build | `list_dir`, `read_file`, one `edit_file_search_replace`; edited program prints words 6 / lines 3 on a test file | 161 s |
+
+Server log during these runs: generation about 11 to 16 tok/s, prompt processing about 18 to 44 tok/s.
+Limits: the test driver (a script standing in for the editor, not the IDE window) does not implement terminals, so
+the agent's compile and syntax checks failed with "editor does not handle terminal/create"; the agent recovered by
+re-reading the file. Two small tasks on one tiny project, one run each; no repeat spread, no harder tasks, and the
+edit approval UI was not exercised.
+
 ### 3.7 Working conclusions (and their limits)
 1. Decode speed of any streaming approach is bounded by (bytes read per token) / (storage bandwidth). Dense 27B on this machine is
    expected at several seconds per token however well tuned (**estimate**, from 3.1 and 3.2, not measured on a 27B).
