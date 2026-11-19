@@ -96,6 +96,12 @@ pub async fn resolve_approval(state: S<'_>, id: u64, accept: bool) -> Result<(),
     state.resolve_approval(id, accept).await
 }
 
+/// The UI reports the outcome of an `ApplyEdit` (applied and saved, or why not).
+#[tauri::command]
+pub fn confirm_edit(state: S<'_>, id: u64, ok: bool, error: Option<String>) -> Result<(), AppError> {
+    state.confirm_edit(id, ok, error)
+}
+
 #[tauri::command]
 pub async fn probe_endpoint(state: S<'_>, url: String) -> Result<ProbeDto, AppError> {
     state.probe_endpoint(&url).await

@@ -9,7 +9,8 @@
 //! agent is resolved through `ide_host::Workspace` before it touches the disk.
 
 use ide_host::acp::AgentEvent;
-use ide_host::editor::{BufferView, EditorHandler, HandlerOutcome, PendingCommand, PendingEdit};
+use ide_host::editor::{BufferView, EditorHandler, HandlerOutcome};
+use ide_host::pending::{Pending, PendingStore, Resolution};
 use ide_host::files::{read_stamped, write_atomic, write_atomic_create_new, FileStamp, WriteError};
 use ide_host::probe::{self, DetectedServer, ProbeResult};
 use ide_host::settings::Settings;
@@ -142,11 +143,13 @@ pub enum UiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         command: Option<String>,
     },
-    /// Reserved for Task 11 (UI applies an accepted edit itself). Not emitted yet.
-    #[allow(dead_code)]
+    /// An accepted edit of an EXISTING file: the UI applies `new_text` to its buffer (one undo
+    /// step), saves it (stamp-checked) and answers with `confirm_edit`. `old` is the text the
+    /// agent's proposal was based on; the UI refuses to apply over a buffer that differs from it.
     ApplyEdit {
         id: u64,
         rel: String,
+        old: String,
         new_text: String,
     },
     /// `state`: `running` | `crashed` | `restarted` | `gave_up`.
@@ -197,7 +200,7 @@ impl UiEvent {
             UiEvent::Approval { kind, title, old, new, command, .. } => {
                 kind.len() + title.len() + opt(old) + opt(new) + opt(command)
             }
-            UiEvent::ApplyEdit { rel, new_text, .. } => rel.len() + new_text.len(),
+            UiEvent::ApplyEdit { rel, old, new_text, .. } => rel.len() + old.len() + new_text.len(),
             UiEvent::FsChanged { paths, .. } => paths.iter().map(|p| p.len() + 4).sum(),
             UiEvent::AgentTerminalOutput { chunk, .. } => chunk.len(),
             UiEvent::AgentState { state } => state.len(),
@@ -590,12 +593,6 @@ impl BufferView for NoBuffers {
     }
 }
 
-pub(crate) enum Pending {
-    /// `stamp: None` = the file did not exist: the write must be create-only.
-    Edit { pe: PendingEdit, stamp: Option<FileStamp> },
-    Command(PendingCommand),
-}
-
 fn approval_event(id: u64, p: &Pending) -> UiEvent {
     match p {
         Pending::Edit { pe, .. } => UiEvent::Approval {
@@ -664,7 +661,9 @@ struct AgentCtx {
 pub struct WsCtx {
     ws: Workspace,
     ui_tx: UnboundedSender<UiEvent>,
-    pending: Mutex<HashMap<u64, Pending>>,
+    pending: PendingStore,
+    /// How long an accepted edit may wait for the UI to apply it before the host writes it itself.
+    confirm_timeout: Duration,
     /// App-wide counter shared by every workspace: approval ids never repeat.
     approval_ids: Arc<AtomicU64>,
     /// Busy flag of this workspace's agent (a turn is running).
@@ -688,16 +687,22 @@ impl WsCtx {
             Pending::Command(pc) => pc.id = id,
         }
         let ev = approval_event(id, &p);
-        self.pending.lock().unwrap().insert(id, p);
+        self.pending.add(id, p);
         self.send(ev);
         id
     }
 
+    /// Everything the UI may have missed: pending approvals, then accepted edits still waiting
+    /// for the UI to apply them (so a reloaded webview finishes the job instead of stalling it).
     fn approval_events(&self) -> Vec<UiEvent> {
-        let g = self.pending.lock().unwrap();
-        let mut v: Vec<(u64, UiEvent)> = g.iter().map(|(id, p)| (*id, approval_event(*id, p))).collect();
-        v.sort_by_key(|(id, _)| *id);
-        v.into_iter().map(|(_, e)| e).collect()
+        let mut v: Vec<UiEvent> = self.pending.pending_snapshot().iter().map(|(id, p)| approval_event(*id, p)).collect();
+        v.extend(
+            self.pending
+                .awaiting_snapshot()
+                .into_iter()
+                .map(|(id, pe)| UiEvent::ApplyEdit { id, rel: pe.path, old: pe.old, new_text: pe.new }),
+        );
+        v
     }
 
     fn start_watcher(&self, ignore: &[String]) {
@@ -736,7 +741,7 @@ impl WsCtx {
             t.abort();
         }
         *self.watcher.lock().unwrap() = None;
-        self.pending.lock().unwrap().clear();
+        let _ = self.pending.clear();
         if let Some(a) = &self.agent {
             release_all_terms(&a.live_terms, &a.terms);
             a.sup.shutdown().await;
@@ -756,18 +761,18 @@ impl WsCtx {
             AgentEvent::Exited { .. } => {
                 agent.epoch.fetch_add(1, Ordering::SeqCst);
                 release_all_terms(&agent.live_terms, &agent.terms);
-                self.pending.lock().unwrap().clear();
+                let _ = self.pending.clear();
                 self.send(UiEvent::AgentState { state: "crashed".into() });
             }
             AgentEvent::Restarted { .. } => {
                 agent.epoch.fetch_add(1, Ordering::SeqCst);
                 release_all_terms(&agent.live_terms, &agent.terms);
-                self.pending.lock().unwrap().clear();
+                let _ = self.pending.clear();
                 self.send(UiEvent::AgentState { state: "restarted".into() });
             }
             AgentEvent::GaveUp => {
                 release_all_terms(&agent.live_terms, &agent.terms);
-                self.pending.lock().unwrap().clear();
+                let _ = self.pending.clear();
                 self.send(UiEvent::AgentState { state: "gave_up".into() });
             }
         }
@@ -945,6 +950,8 @@ pub struct AppState {
     inner: Mutex<Inner>,
     open_lock: tokio::sync::Mutex<()>,
     approval_ids: Arc<AtomicU64>,
+    /// See `WsCtx::confirm_timeout` (a field so tests can shorten it).
+    pub(crate) confirm_timeout: Duration,
     terms: Arc<Mutex<HashMap<u64, Arc<UserPty>>>>,
     next_term: AtomicU64,
 }
@@ -962,6 +969,7 @@ impl AppState {
             inner: Mutex::new(Inner { ws: None, settings }),
             open_lock: tokio::sync::Mutex::new(()),
             approval_ids: Arc::new(AtomicU64::new(1)),
+            confirm_timeout: Duration::from_secs(30),
             terms: Arc::new(Mutex::new(HashMap::new())),
             next_term: AtomicU64::new(1),
         }
@@ -1059,7 +1067,8 @@ impl AppState {
         let ctx = Arc::new(WsCtx {
             ws: ws.clone(),
             ui_tx: self.ui_tx.clone(),
-            pending: Mutex::new(HashMap::new()),
+            pending: PendingStore::new(),
+            confirm_timeout: self.confirm_timeout,
             approval_ids: self.approval_ids.clone(),
             turn_active: Arc::new(AtomicBool::new(false)),
             agent: agent_parts.as_ref().map(|p| p.0.clone()),
@@ -1227,7 +1236,7 @@ impl AppState {
     pub fn agent_cancel(&self) {
         let Ok(ctx) = self.ctx() else { return };
         // The agent will fail the pending permission call itself; forget our copies.
-        ctx.pending.lock().unwrap().clear();
+        let _ = ctx.pending.clear();
         if let Some(a) = &ctx.agent {
             if let Some((_, sid)) = a.session.lock().unwrap().clone() {
                 a.sup.notify("session/cancel", json!({ "sessionId": sid }));
@@ -1235,56 +1244,90 @@ impl AppState {
         }
     }
 
-    /// Resolve a pending approval. Edits are written by the host for now (stamp-checked,
-    /// atomic); Task 11 replaces this with the `ApplyEdit` / `confirm_edit` round trip.
+    /// Resolve a pending approval.
+    ///  - commands and rejections are answered to the agent right away;
+    ///  - an accepted edit of an existing file is handed to the UI (`ApplyEdit`): the agent is
+    ///    answered only when the UI calls `confirm_edit`, or, if the UI never does, when the host
+    ///    writes the edit itself after `confirm_timeout` (stamp-checked, so it cannot clobber);
+    ///  - an accepted edit that creates a new file is written by the host (create-only).
     pub async fn resolve_approval(&self, id: u64, accept: bool) -> Result<(), AppError> {
         let ctx = self.ctx()?;
-        let item = ctx.pending.lock().unwrap().remove(&id);
-        let Some(item) = item else {
+        let Some(resolution) = ctx.pending.resolve(id, accept) else {
             return Err(AppError::new("unknown_approval", format!("no pending approval {id}")));
         };
         let agent = ctx.agent.clone().ok_or_else(|| AppError::new("agent_missing", "no agent"))?;
-        match item {
-            Pending::Command(pc) => {
+        match resolution {
+            Resolution::Command { agent_id, accept } => {
                 let option = if accept { "allow" } else { "reject" };
-                agent.sup.respond(
-                    pc.agent_id,
-                    Ok(json!({"outcome": {"outcome": "selected", "optionId": option}})),
-                );
+                agent.sup.respond(agent_id, Ok(json!({"outcome": {"outcome": "selected", "optionId": option}})));
                 Ok(())
             }
-            Pending::Edit { pe, stamp } => {
-                if !accept {
-                    agent.sup.respond(
-                        pe.agent_id,
-                        Err(json!({"code": -32000, "message": "edit rejected by the user"})),
-                    );
-                    return Ok(());
-                }
+            Resolution::EditRejected { agent_id } => {
+                agent.sup.respond(agent_id, Err(json!({"code": -32000, "message": "edit rejected by the user"})));
+                Ok(())
+            }
+            Resolution::EditAccepted { pe, stamp: None } => {
+                // a new file has no buffer to apply it to: the host creates it (create-only)
                 let ws = ctx.ws.clone();
                 let (path, new) = (pe.path.clone(), pe.new.clone());
-                let res = tokio::task::spawn_blocking(move || match stamp {
-                    Some(st) => write_atomic(&ws, &path, &new, Some(&st)),
-                    None => write_atomic_create_new(&ws, &path, &new),
-                })
+                let res = tokio::task::spawn_blocking(move || write_atomic_create_new(&ws, &path, &new))
                     .await
                     .map_err(|e| AppError::new("io", e.to_string()))?;
-                match res {
-                    Ok(_) => {
-                        agent.sup.respond(pe.agent_id, Ok(Value::Null));
-                        Ok(())
-                    }
-                    Err(e) => {
-                        let err: AppError = e.into();
-                        agent.sup.respond(
-                            pe.agent_id,
-                            Err(json!({"code": -32000, "message": err.message})),
-                        );
-                        Err(err)
-                    }
-                }
+                Self::answer_write(&agent, pe.agent_id, res.map(|_| ()).map_err(AppError::from))
+            }
+            Resolution::EditAccepted { pe, stamp: Some(stamp) } => {
+                ctx.pending.await_confirmation(id, pe.clone());
+                ctx.send(UiEvent::ApplyEdit { id, rel: pe.path.clone(), old: pe.old.clone(), new_text: pe.new.clone() });
+                // Safety net: a closed or reloading webview must not leave the agent waiting forever.
+                let (ctx2, agent2, timeout) = (ctx.clone(), agent.clone(), ctx.confirm_timeout);
+                let task = tokio::spawn(async move {
+                    tokio::time::sleep(timeout).await;
+                    let Some(pe) = ctx2.pending.confirm(id) else { return }; // the UI answered in time
+                    eprintln!("edit {id} was not confirmed by the UI in time; the host writes {}", pe.path);
+                    let ws = ctx2.ws.clone();
+                    let (path, new) = (pe.path.clone(), pe.new.clone());
+                    let res = tokio::task::spawn_blocking(move || write_atomic(&ws, &path, &new, Some(&stamp))).await;
+                    let res = match res {
+                        Ok(r) => r.map(|_| ()).map_err(AppError::from),
+                        Err(e) => Err(AppError::new("io", e.to_string())),
+                    };
+                    let _ = Self::answer_write(&agent2, pe.agent_id, res);
+                });
+                ctx.tasks.lock().unwrap().push(task);
+                Ok(())
             }
         }
+    }
+
+    fn answer_write(agent: &Arc<AgentCtx>, agent_id: Value, res: Result<(), AppError>) -> Result<(), AppError> {
+        match res {
+            Ok(()) => {
+                agent.sup.respond(agent_id, Ok(Value::Null));
+                Ok(())
+            }
+            Err(err) => {
+                agent.sup.respond(agent_id, Err(json!({"code": -32000, "message": err.message.clone()})));
+                Err(err)
+            }
+        }
+    }
+
+    /// The UI reports the outcome of an `ApplyEdit`: `ok` = applied and saved. Answers the agent's
+    /// pending `fs/write_text_file`. `unknown_approval` = already answered, timed out, or the
+    /// agent is gone (nothing to do).
+    pub fn confirm_edit(&self, id: u64, ok: bool, error: Option<String>) -> Result<(), AppError> {
+        let ctx = self.ctx()?;
+        let Some(pe) = ctx.pending.confirm(id) else {
+            return Err(AppError::new("unknown_approval", format!("no edit {id} is waiting for confirmation")));
+        };
+        let agent = ctx.agent.clone().ok_or_else(|| AppError::new("agent_missing", "no agent"))?;
+        if ok {
+            agent.sup.respond(pe.agent_id, Ok(Value::Null));
+        } else {
+            let msg = error.unwrap_or_else(|| "the editor could not apply the edit".into());
+            agent.sup.respond(pe.agent_id, Err(json!({"code": -32000, "message": msg})));
+        }
+        Ok(())
     }
 
     // ---- settings and probes
@@ -1447,6 +1490,7 @@ pub async fn run_gpu_loop(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ide_host::editor::PendingCommand;
     use serde_json::json;
 
     fn chunk(s: &str) -> UiEvent { UiEvent::Chunk { text: s.into() } }
@@ -1599,8 +1643,8 @@ mod tests {
             id: 3, kind: "command".into(), title: "run".into(), old: None, new: None, command: Some("cargo test".into()),
         }).unwrap();
         assert_eq!(v, json!({"type":"approval","id":3,"kind":"command","title":"run","command":"cargo test"}));
-        let v = serde_json::to_value(UiEvent::ApplyEdit { id: 1, rel: "a.rs".into(), new_text: "x".into() }).unwrap();
-        assert_eq!(v, json!({"type":"applyEdit","id":1,"rel":"a.rs","newText":"x"}));
+        let v = serde_json::to_value(UiEvent::ApplyEdit { id: 1, rel: "a.rs".into(), old: "w".into(), new_text: "x".into() }).unwrap();
+        assert_eq!(v, json!({"type":"applyEdit","id":1,"rel":"a.rs","old":"w","newText":"x"}));
         let v = serde_json::to_value(AppError::new("conflict", "m")).unwrap();
         assert_eq!(v, json!({"code":"conflict","message":"m"}));
     }
@@ -1944,7 +1988,7 @@ mod tests {
     }
 
     /// Build agent-core if needed; fail loudly instead of skipping.
-    fn agent_exe_or_build() -> PathBuf {
+    pub(super) fn agent_exe_or_build() -> PathBuf {
         let me = std::env::current_exe().unwrap();
         if let Some(p) = locate_agent_exe_with(&me, None, true) {
             return p;
@@ -2010,3 +2054,7 @@ mod tests {
         st.shutdown().await;
     }
 }
+
+#[cfg(test)]
+#[path = "state_edit_tests.rs"]
+mod edit_tests;

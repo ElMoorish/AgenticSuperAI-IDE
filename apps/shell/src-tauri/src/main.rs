@@ -35,6 +35,7 @@ fn main() {
             commands::agent_prompt,
             commands::agent_cancel,
             commands::resolve_approval,
+            commands::confirm_edit,
             commands::probe_endpoint,
             commands::detect_servers,
             commands::get_settings,
