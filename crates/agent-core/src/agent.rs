@@ -121,7 +121,8 @@ mod tests {
         let names = |m: Mode| -> Vec<String> {
             m.tool_schemas().iter().map(|s| s["function"]["name"].as_str().unwrap().to_string()).collect()
         };
-        assert_eq!(names(Mode::Plan), vec!["read_file"]);
+        assert_eq!(names(Mode::Plan), Mode::Plan.tools());
+        assert_eq!(names(Mode::Plan), vec!["list_dir", "find_files", "search_text", "read_file"]);
         assert_eq!(names(Mode::Build), Mode::Build.tools());
     }
 }
