@@ -112,3 +112,10 @@ button.cmd:hover { border-color: var(--accent); }
 .palette-list li.sel { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
 .palette-list .ph { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-empty { padding: 0.75rem 0.875rem; color: var(--muted); font-size: 0.8125rem; }
+
+/* Chat scrolling: the conversation must be the one scrolling box of the agent panel. These rules
+   are scoped (.agent .ledger) so they win over the placeholder rule in tokens.css regardless of
+   stylesheet order, and the items must not shrink or the content would squash instead of scroll. */
+.agent .ledger { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; color: var(--text); }
+.agent .ledger > * { flex: none; }
+.agent .ledger:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
