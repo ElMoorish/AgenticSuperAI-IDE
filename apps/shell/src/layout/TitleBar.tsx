@@ -2,7 +2,7 @@ import { CircleHelp, Minus, Plug, Search, Square, Unplug, X } from "lucide-react
 import { windowControl } from "../ipc";
 import { Brand } from "../ui/Brand";
 import { useModelProbe, useModelStatus } from "../settings/modelStatus";
-import { useSettingsDialog } from "../settings/dialogStore";
+import { useModelsDialog } from "../models/ModelsDialog";
 import { usePalette } from "../palette/paletteStore";
 import { useStore } from "../state/store";
 import { THEME_LABELS, THEME_NAMES, isThemeName } from "../styles/themes";
@@ -22,7 +22,7 @@ export function TitleBar() {
   const folder = useStore((s) => s.workspace.info?.name);
   const model = useStore((s) => s.settings.value?.model);
   const status = useModelStatus((s) => s.state);
-  const openSettings = useSettingsDialog((s) => s.open);
+  const openModels = useModelsDialog((s) => s.open);
   useModelProbe();
   const label = status === "up" ? "connected" : status === "down" ? "server not reachable" : "status unknown";
 
@@ -38,9 +38,9 @@ export function TitleBar() {
       <button
         type="button"
         className={`chip chip-${status}`}
-        aria-label={`Model ${model || "none"}: ${label}. Open settings`}
-        title={status === "down" ? "The model server is not reachable. Click to change it." : "Model and server settings"}
-        onClick={openSettings}
+        aria-label={`Model ${model || "none"}: ${label}. Open models`}
+        title={status === "down" ? "The model server is not reachable. Click to change it." : "Find and start a model, or switch server"}
+        onClick={openModels}
       >
         {status === "up" ? <Plug size={14} className="sico up" aria-hidden="true" /> : status === "down" ? <Unplug size={14} className="sico down" aria-hidden="true" /> : <CircleHelp size={14} className="sico" aria-hidden="true" />}
         <span>{model || "no model"}</span>

@@ -3,6 +3,7 @@ import { copyDiagnostics, detectServers, getSettings, normalizeError, setSetting
 import { clampContext, useAgent } from "../agent/agentStore";
 import { useStore } from "../state/store";
 import { THEME_LABELS, THEME_NAMES, isThemeName } from "../styles/themes";
+import { useModelsDialog } from "../models/ModelsDialog";
 import { useModelStatus, validateEndpoint } from "./modelStatus";
 
 const FONT_MIN = 8;
@@ -125,6 +126,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     <div className="modal-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div ref={dialog} className="modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings" onKeyDown={onKeyDown}>
         <h3>Settings</h3>
+
+        <div className="sfield">
+          <span>Local models</span>
+          <button type="button" onClick={() => { useModelsDialog.getState().open(); onClose(); }}>Find and start a model…</button>
+        </div>
 
         <label className="sfield">
           <span>Model server address</span>
