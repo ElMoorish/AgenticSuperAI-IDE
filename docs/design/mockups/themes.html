@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASA IDE · five themes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Fira+Code:wght@400;500&family=Hanken+Grotesk:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Martian+Mono:wght@300;400;500&family=Familjen+Grotesk:wght@400;500;600;700&family=Red+Hat+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#111;--chrome:#0a0a0a;--panel:#161616;--raise:#1e1e1e;--line:#333;--line2:#555;--text:#eee;--muted:#999;--a:#f60;--b:#0cf;--c:#bf4;--add:#143;--del:#412;--kw:#f9c;--st:#9fb;--fn:#6df;--nu:#fd5;--cm:#667;--off:#222;--r:6px;--ui:system-ui;--mono:monospace;--ink:#fff}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:#000;color:var(--text);font:400 13px/1.4 var(--ui);overflow:hidden;display:flex;flex-direction:column}
+/* switcher */
+.pick{display:flex;gap:6px;align-items:center;padding:8px 12px;background:#0b0b0d;font:500 12px system-ui;color:#cfd3da;flex-wrap:wrap}
+.pick button{font:inherit;color:inherit;background:#1a1b20;border:1px solid #2b2d35;border-radius:999px;padding:5px 12px;cursor:pointer}
+.pick button[aria-pressed="true"]{background:#e9eaee;color:#0b0b0d;border-color:#e9eaee}
+.pick button:focus-visible{outline:2px solid #6df;outline-offset:2px}
+.pick .tag{margin-left:auto;opacity:.7;max-width:46ch;text-align:right}
+.ide{flex:1;min-height:0;background:var(--bg);color:var(--text);display:grid;grid-template-columns:190px 1fr 320px;grid-template-rows:40px 1fr 176px 28px;transition:background .35s}
+.title{grid-column:1/-1;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:15px}
+.brand svg{width:24px;height:24px}
+.brand span{color:var(--muted);font-weight:500}
+.sp{flex:1}
+.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel);border-radius:var(--r);padding:4px 10px;color:var(--muted);font-weight:500}
+.chip b{color:var(--text);font-weight:600}
+.ic{display:inline-flex;flex:none}.ic svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.led{color:var(--c);animation:led 1.6s ease-in-out infinite}.led svg{width:15px;height:15px}
+@keyframes led{50%{opacity:.4}}
+.side{background:var(--panel);border-right:1px solid var(--line);padding:12px 8px}
+.side h4{font-size:11px;font-weight:700;color:var(--muted);padding:0 8px 8px}
+.row{display:flex;gap:8px;align-items:center;padding:5px 8px;border-radius:calc(var(--r) - 2px);color:var(--muted)}
+.row .ic{color:var(--line2)}
+.row.on{background:var(--raise);color:var(--text);outline:1px solid var(--line2)}
+.row.on .ic{color:var(--a)}
+.row.d1{padding-left:22px}
+.editor{min-width:0;display:flex;flex-direction:column}
+.tabs{display:flex;background:var(--chrome);border-bottom:1px solid var(--line)}
+.tab{display:flex;align-items:center;gap:7px;padding:9px 16px;color:var(--muted);border-right:1px solid var(--line)}
+.tab.on{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px var(--a)}
+.code{flex:1;padding:12px 0;font:400 12.5px/1.75 var(--mono);overflow:hidden}
+.ln{display:flex}.ln i{width:46px;text-align:right;padding-right:16px;color:var(--cm);font-style:normal}
+.ln.add{background:var(--add)}.ln.del{background:var(--del)}
+.k{color:var(--kw)}.s{color:var(--st)}.f{color:var(--fn)}.n{color:var(--nu)}.c{color:var(--cm);font-style:italic}
+.agent{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.voice{padding:14px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:46px 1fr;gap:12px;align-items:center}
+.core{width:46px;height:46px;color:var(--a);filter:drop-shadow(0 0 7px color-mix(in srgb,var(--a) 55%,transparent))}
+.core svg{width:46px;height:46px;overflow:visible}
+#mark{display:inline-flex;color:var(--a)}
+.applied .ic svg{width:13px;height:13px}
+.pane h6 .ic svg{width:12px;height:12px}.pane h6 span.l{display:inline-flex;gap:6px;align-items:center}
+.voice h3{font-size:14px;font-weight:800}
+.voice p{color:var(--muted);font:500 12px var(--mono);margin-top:2px;min-height:16px}
+.voice p::after{content:"▌";color:var(--a);animation:blink 1s steps(1) infinite;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes throb{50%{transform:scale(1.3)}}
+@keyframes breathe{50%{transform:scale(1.18);opacity:.55}}
+@keyframes sway{0%,100%{transform:rotate(-28deg)}50%{transform:rotate(28deg)}}
+@keyframes bob{50%{transform:translateY(-3px)}}
+.spin{transform-origin:center;animation:spin 8s linear infinite}
+.spinr{transform-origin:center;animation:spin 5s linear infinite reverse}
+.throb{transform-origin:center;animation:throb 1.2s ease-in-out infinite}
+.breathe{transform-origin:center;animation:breathe 3s ease-in-out infinite}
+.sway{transform-origin:50% 90%;animation:sway 1.4s ease-in-out infinite}
+.bob{animation:bob 2.2s ease-in-out infinite}
+.chat{flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:12px}
+.you{align-self:flex-end;background:var(--raise);border-radius:var(--r);padding:8px 12px;max-width:88%}
+.say{font-size:14px;line-height:1.55}
+.tool{display:flex;align-items:center;gap:8px;font:500 12px var(--mono);color:var(--muted)}
+.tool b{color:var(--b);font-weight:500}
+.card{border:1px solid var(--a);background:var(--raise);border-radius:var(--r);padding:12px;display:grid;gap:10px;transition:transform .35s cubic-bezier(.3,.7,.2,1),opacity .3s,max-height .35s;max-height:220px;overflow:hidden}
+.card.gone{transform:translateX(24px);opacity:0;max-height:0;padding:0;border-width:0}
+.card h5{font-size:12px;font-weight:700;display:flex;justify-content:space-between}
+.card h5 em{font:400 11px var(--mono);font-style:normal;color:var(--c)}
+.diff{font:400 11.5px/1.6 var(--mono);border-radius:3px;overflow:hidden}
+.diff div{padding:1px 8px}.diff .a{background:var(--add)}.diff .r{background:var(--del)}
+.btns{display:flex;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;font:700 12px var(--ui);border-radius:calc(var(--r) - 1px);padding:7px 16px;border:1px solid var(--line2);background:transparent;color:var(--text);cursor:pointer}
+.btn.pri{background:var(--a);color:var(--ink);border-color:transparent}
+.btn:focus-visible{outline:2px solid var(--b);outline-offset:2px}
+.btn:active{transform:translateY(1px)}
+.applied{display:none;color:var(--c);font:500 12px var(--mono)}
+.applied.on{display:block;animation:pop .35s cubic-bezier(.3,.9,.3,1.3)}
+@keyframes pop{from{transform:scale(.92);opacity:0}}
+.compose{border-top:1px solid var(--line);padding:10px 12px;display:flex;gap:8px}
+.compose div{flex:1;background:var(--raise);border:1px solid var(--line);border-radius:var(--r);padding:9px 12px;color:var(--muted)}
+.engine{grid-column:1/-1;display:grid;grid-template-columns:1.25fr 1fr 1fr;border-top:1px solid var(--line);background:var(--chrome)}
+.pane{padding:10px 14px;border-right:1px solid var(--line);min-width:0;display:flex;flex-direction:column;gap:6px}
+.pane:last-child{border-right:0}
+.pane h6{font-size:11px;font-weight:700;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.pane h6 b{color:var(--text);font:500 11px var(--mono);white-space:nowrap}
+canvas{width:100%;flex:1;min-height:0;display:block}
+.tiers{flex:1;display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:6px;font:500 11px var(--mono)}
+.tier{border:1px solid var(--line2);border-radius:var(--r);padding:8px 6px;text-align:center;background:var(--panel)}
+.tier b{display:block;font:700 15px var(--ui);color:var(--text)}
+.tier small{color:var(--muted)}.tier .ic{display:flex;justify-content:center;color:var(--b);margin-bottom:2px}.tier .ic svg{width:18px;height:18px}
+.tier .bar{height:4px;border-radius:9px;background:var(--line);margin-top:6px;overflow:hidden}
+.tier .bar u{display:block;height:100%;background:linear-gradient(90deg,var(--b),var(--a))}
+.pipe{width:44px;height:8px;position:relative;overflow:hidden;border-radius:9px;background:var(--line)}
+.pipe::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,var(--b) 0 6px,transparent 6px 14px);animation:flow 1s linear infinite}
+@keyframes flow{to{background-position:14px 0}}
+.status{grid-column:1/-1;background:var(--chrome);border-top:1px solid var(--line);display:flex;align-items:center;gap:20px;padding:0 14px;color:var(--muted);font:400 11.5px var(--mono)}
+.status b{color:var(--text);font-weight:500}
+@media (max-width:900px){.ide{grid-template-columns:1fr}.side,.agent{display:none}.engine{grid-template-columns:1fr}.pane:nth-child(n+2){display:none}.pick .tag{display:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="pick" id="pick" role="group" aria-label="Theme"></div>
+
+<div class="ide" id="ide">
+  <header class="title">
+    <div class="brand"><span id="mark"></span><b>ASA</b> <span>wordcount</span></div>
+    <span class="sp"></span>
+    <span class="chip"><i class="ic led" data-ic="activity"></i><b>Qwen3.5 35B</b> · <span id="runs">runs on this PC</span></span>
+    <span class="chip">Build mode</span>
+  </header>
+  <nav class="side"><h4>PROJECT</h4>
+    <div class="row"><i class="ic" data-ic="folder"></i>src</div><div class="row d1 on"><i class="ic" data-ic="filecode"></i>main.py</div><div class="row d1"><i class="ic" data-ic="filecode"></i>counter.py</div><div class="row"><i class="ic" data-ic="filetext"></i>README.md</div></nav>
+  <main class="editor"><div class="tabs"><div class="tab on"><i class="ic" data-ic="filecode"></i>main.py</div><div class="tab"><i class="ic" data-ic="filetext"></i>README.md</div></div>
+    <div class="code">
+      <div class="ln"><i>1</i><span><span class="k">import</span> sys</span></div>
+      <div class="ln"><i>2</i><span></span></div>
+      <div class="ln"><i>3</i><span><span class="k">def</span> <span class="f">count_words</span>(path):</span></div>
+      <div class="ln"><i>4</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="c"># read once, split on any whitespace</span></span></div>
+      <div class="ln"><i>5</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">with</span> <span class="f">open</span>(path) <span class="k">as</span> fh:</span></div>
+      <div class="ln del"><i>6</i><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> <span class="f">len</span>(fh.read().split(<span class="s">" "</span>))</span></div>
+      <div class="ln add"><i>6</i><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> <span class="f">len</span>(fh.read().split())</span></div>
+      <div class="ln"><i>7</i><span></span></div>
+      <div class="ln"><i>8</i><span><span class="k">if</span> __name__ == <span class="s">"__main__"</span>:</span></div>
+      <div class="ln"><i>9</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="f">print</span>(<span class="f">count_words</span>(sys.argv[<span class="n">1</span>]))</span></div>
+    </div></main>
+  <aside class="agent">
+    <div class="voice"><div class="core" id="core" aria-hidden="true"></div><div><h3 id="vh">Working on it</h3><p id="voice"></p></div></div>
+    <div class="chat">
+      <div class="you">Count words correctly when there are double spaces.</div>
+      <div class="tool"><i class="ic" data-ic="eye"></i><b>read</b> src/main.py · 9 lines</div>
+      <div class="say">Splitting on one space counts empty strings between double spaces. Splitting on any whitespace fixes it.</div>
+      <div class="card" id="card"><h5>Edit src/main.py <em>+1 −1</em></h5>
+        <div class="diff"><div class="r">- return len(fh.read().split(" "))</div><div class="a">+ return len(fh.read().split())</div></div>
+        <div class="btns"><button class="btn pri" id="ok"><i class="ic" data-ic="check"></i>Accept</button><button class="btn" id="no"><i class="ic" data-ic="x"></i>Reject</button></div></div>
+      <div class="applied" id="applied"><i class="ic" data-ic="check"></i> Applied to src/main.py</div>
+    </div>
+    <div class="compose"><div>Tell the agent what to build…</div><button class="btn pri"><i class="ic" data-ic="send"></i>Send</button></div>
+  </aside>
+  <section class="engine" aria-label="Engine">
+    <div class="pane"><h6><span class="l"><i class="ic" data-ic="brain"></i>EXPERTS AWAKE THIS TOKEN</span><b>8 of 256</b></h6><canvas id="heat"></canvas></div>
+    <div class="pane"><h6><span class="l"><i class="ic" data-ic="activity"></i>SPEED</span><b><span id="tps">6.4</span> tok/s</b></h6><canvas id="spark"></canvas></div>
+    <div class="pane"><h6><span class="l"><i class="ic" data-ic="layers"></i>WHERE THE MODEL LIVES</span><b>1.8 GB/s</b></h6>
+      <div class="tiers"><div class="tier"><i class="ic" data-ic="disk"></i><small>DISK</small><b>18 GB</b><div class="bar"><u style="width:100%"></u></div></div><div class="pipe"></div>
+        <div class="tier"><i class="ic" data-ic="ram"></i><small>RAM</small><b>9.7 GB</b><div class="bar"><u style="width:61%"></u></div></div><div class="pipe"></div>
+        <div class="tier"><i class="ic" data-ic="cpu"></i><small>GPU</small><b>6.2 GB</b><div class="bar"><u style="width:78%"></u></div></div></div></div>
+  </section>
+  <footer class="status"><span>context <b>4.1k / 32k</b></span><span class="sp"></span><span id="foot">nothing leaves this machine</span></footer>
+</div>
+
+<script>
+const P={
+folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+filecode:'<path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+filetext:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+check:'<path d="M20 6 9 17l-5-5"/>',
+x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+send:'<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+eye:'<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
+activity:'<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+brain:'<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/>',
+layers:'<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+disk:'<path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01"/><path d="M10 16h.01"/>',
+ram:'<path d="M6 19v-3"/><path d="M10 19v-3"/><path d="M14 19v-3"/><path d="M18 19v-3"/><path d="M8 11V9"/><path d="M16 11V9"/><path d="M12 11V9"/><path d="M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/>',
+cpu:'<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
+flame:'<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+hammer:'<path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9"/><path d="m18 15 4-4"/><path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5"/>',
+sparkles:'<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>',
+ruler:'<path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/>',
+compass:'<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>',
+plus:'<path d="M5 12h14"/><path d="M12 5v14"/>',
+waves:'<path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>',
+droplet:'<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>',
+terminal:'<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+bolt:'<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>'};
+const IC=(n,cls="",sw=2)=>`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
+const HP={};for(const n in P)HP[n]=new Path2D([...P[n].matchAll(/ d="([^"]+)"/g)].map(m=>m[1]).join(" "));
+document.querySelectorAll("[data-ic]").forEach(e=>e.innerHTML=IC(e.dataset.ic));
+const S=(d)=>`<svg viewBox="0 0 32 32" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const C=(d)=>`<svg viewBox="0 0 46 46" fill="none" stroke-linecap="round" aria-hidden="true">${d}</svg>`;
+const THEMES={
+forge:{label:"1 · Forge",tag:"Hot metal. Every token is a spark struck from steel. Robust, warm, hard-working.",
+ v:{bg:"#15110f",chrome:"#0d0a09",panel:"#1d1714",raise:"#2a211c",line:"#3a2d25",line2:"#5a4638",text:"#f4e9df",muted:"#a58f7e",a:"#ff6a1a",b:"#ffb23d",c:"#ffd76a",add:"#2c3a1a",del:"#4a1f12",kw:"#ff9a5a",st:"#e9d27a",fn:"#ffb23d",nu:"#ffd76a",cm:"#7a6455",off:"#241c17",r:"3px",ink:"#1a0b02",ui:'"Bricolage Grotesque",system-ui,sans-serif',mono:'"IBM Plex Mono",Consolas,monospace'},
+ mark:IC("hammer","",2.2),
+ core:IC("flame","throb",1.6),
+ heat:"flame",voice:["Striking the first draft","Reading src/main.py","Heating the edit","Waiting for your nod"],vh:"At the forge",runs:"forged on this PC",foot:"every token made here, kept here"},
+aurora:{label:"2 · Aurora",tag:"Northern-lights calm. The model's thinking drifts as light. Fluid, quiet, still energetic.",
+ v:{bg:"#08140f",chrome:"#050d0a",panel:"#0d1c16",raise:"#14291f",line:"#1f3b2e",line2:"#2f5a45",text:"#e3f6ec",muted:"#7fa896",a:"#3dffb0",b:"#9b7bff",c:"#c8ff7a",add:"#0f3a2a",del:"#3d1f3a",kw:"#b69bff",st:"#9dffd0",fn:"#3dffb0",nu:"#ffe27a",cm:"#4c7766",off:"#102219",r:"12px",ink:"#04180f",ui:'Outfit,system-ui,sans-serif',mono:'"Fira Code",Consolas,monospace'},
+ mark:IC("sparkles","",2.2),
+ core:IC("sparkles","breathe",1.6),
+ heat:"sparkles",voice:["Weaving the change","Reading src/main.py","Drifting through ideas","Waiting for you"],vh:"Thinking in light",runs:"glowing on this PC",foot:"quiet, local, yours"},
+draft:{label:"3 · Drafting table",tag:"Light, ink and one signal orange. Dimension lines and plotted points. Precise and accurate.",
+ v:{bg:"#f2f4f7",chrome:"#e3e8ef",panel:"#fafbfc",raise:"#ffffff",line:"#c8d1dd",line2:"#8fa0b8",text:"#13203a",muted:"#5d6d88",a:"#e8501c",b:"#1f4fd8",c:"#14803f",add:"#d9f2e1",del:"#fadcd6",kw:"#1f4fd8",st:"#14803f",fn:"#8a3ffc",nu:"#a85d00",cm:"#8593ab",off:"#dfe5ee",r:"2px",ink:"#ffffff",ui:'"Hanken Grotesk",system-ui,sans-serif',mono:'"DM Mono",Consolas,monospace'},
+ mark:IC("ruler","",2.2),
+ core:IC("compass","sway",1.6),
+ heat:"plus",voice:["Measuring twice","Reading src/main.py","Drafting the edit","Awaiting sign-off"],vh:"At the drawing board",runs:"drawn on this PC",foot:"measured, local, exact"},
+sea:{label:"4 · Deep sea",tag:"Bioluminescence. Experts wake like plankton in the dark. Mysterious, alive, calm under pressure.",
+ v:{bg:"#061a22",chrome:"#04121a",panel:"#09232d",raise:"#0f3340",line:"#17465a",line2:"#25738d",text:"#d9f2f7",muted:"#74a8b6",a:"#34f0d0",b:"#4aa8ff",c:"#ffe27a",add:"#0c3d3a",del:"#3d2230",kw:"#6bc1ff",st:"#8ff5cf",fn:"#34f0d0",nu:"#ffe27a",cm:"#3f7587",off:"#0b2a35",r:"10px",ink:"#03211d",ui:'"Schibsted Grotesk",system-ui,sans-serif',mono:'"Martian Mono",Consolas,monospace'},
+ mark:IC("waves","",2.2),
+ core:IC("droplet","bob",1.6),
+ heat:"droplet",voice:["Diving into src/main.py","Listening in the dark","Surfacing an edit","Holding for your nod"],vh:"Down in the deep",runs:"alive on this PC",foot:"deep, dark, and entirely yours"},
+mono:{label:"5 · Monolith",tag:"Black, white, one red. No decoration. Swiss precision, a metronome for a heartbeat.",
+ v:{bg:"#0c0c0c",chrome:"#050505",panel:"#121212",raise:"#1b1b1b",line:"#2c2c2c",line2:"#4a4a4a",text:"#f5f5f5",muted:"#9a9a9a",a:"#ff2d2d",b:"#ffffff",c:"#f5f5f5",add:"#1a2a1a",del:"#321414",kw:"#ffffff",st:"#bdbdbd",fn:"#ff5a5a",nu:"#e0e0e0",cm:"#666666",off:"#1a1a1a",r:"0px",ink:"#ffffff",ui:'"Familjen Grotesk",system-ui,sans-serif',mono:'"Red Hat Mono",Consolas,monospace'},
+ mark:IC("terminal","",2.2),
+ core:IC("bolt","throb",1.6),
+ heat:"bolt",voice:["Reading src/main.py","One edit proposed","Awaiting approval","Done. Nothing else."],vh:"Working",runs:"on this PC",foot:"local. verified. nothing leaves."}
+};
+const ide=document.getElementById("ide"),pick=document.getElementById("pick");
+let T=THEMES.forge,rgb={a:[0,0,0],b:[0,0,0]},offc="#222";
+const hex=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
+function setTheme(k){T=THEMES[k];for(const[n,v]of Object.entries(T.v))ide.style.setProperty("--"+n,v);
+  document.getElementById("mark").innerHTML=T.mark;document.getElementById("core").innerHTML=T.core;
+  document.getElementById("vh").textContent=T.vh;document.getElementById("runs").textContent=T.runs;document.getElementById("foot").textContent=T.foot;
+  rgb={a:hex(T.v.a),b:hex(T.v.b)};offc=T.v.off;li=0;document.getElementById("voice").textContent=T.voice[0];
+  pick.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.k===k)));
+  pick.querySelector(".tag").textContent=T.tag;card.classList.remove("gone");applied.classList.remove("on");}
+for(const k in THEMES){const b=document.createElement("button");b.dataset.k=k;b.textContent=THEMES[k].label;b.onclick=()=>setTheme(k);pick.appendChild(b)}
+const tg=document.createElement("span");tg.className="tag";pick.appendChild(tg);
+const card=document.getElementById("card"),applied=document.getElementById("applied");
+document.getElementById("ok").onclick=()=>{card.classList.add("gone");applied.classList.add("on")};
+document.getElementById("no").onclick=()=>card.classList.add("gone");
+let li=0;setInterval(()=>{li=(li+1)%T.voice.length;document.getElementById("voice").textContent=T.voice[li]},2600);
+const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+const hv=document.getElementById("heat"),sv=document.getElementById("spark"),COLS=32,ROWS=8,heat=new Float32Array(256),seed=Array.from({length:256},()=>Math.random()*6.28);
+let tokClock=0,speed=6.4,hist=Array.from({length:60},(_,i)=>6.4+Math.sin(i/5)*1.5);
+function fit(c){const d=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;if(c.width!==w*d||c.height!==h*d){c.width=w*d;c.height=h*d}const x=c.getContext("2d");x.setTransform(d,0,0,d,0,0);return[x,w,h]}
+const mix=(v)=>rgb.b.map((q,i)=>(q+(rgb.a[i]-q)*v)|0);
+function drawHeat(t){const[x,w,h]=fit(hv);x.clearRect(0,0,w,h);const cw=w/COLS,ch=h/ROWS,m=Math.min(cw,ch),sz=m*.92,path=HP[T.heat];
+ for(let i=0;i<256;i++){const v=heat[i],on=v>.03,[r,gg,b]=mix(v);let cx=(i%COLS)*cw+cw/2,cy=((i/COLS)|0)*ch+ch/2;
+  if(T.heat==="droplet"){cx+=Math.sin(t/1400+seed[i])*2;cy+=Math.cos(t/1700+seed[i])*2}
+  const col=on?`rgba(${r},${gg},${b},${.35+.65*v})`:offc;
+  x.save();x.translate(cx-sz/2,cy-sz/2);x.scale(sz/24,sz/24);x.lineWidth=2.2;x.lineJoin="round";x.lineCap="round";x.strokeStyle=col;x.fillStyle=col;
+  if(on&&v>.45){x.shadowColor=`rgb(${r},${gg},${b})`;x.shadowBlur=14*24/sz}
+  x.stroke(path);if(on&&v>.2){x.globalAlpha=.55*v;x.fill(path)}x.restore();
+  heat[i]=Math.max(0,v-.022)}}
+function drawSpark(){const[x,w,h]=fit(sv);x.clearRect(0,0,w,h);const max=12,pad=6;
+ x.strokeStyle=T.v.line;x.lineWidth=1;for(let i=1;i<4;i++){x.beginPath();x.moveTo(0,h*i/4);x.lineTo(w,h*i/4);x.stroke()}
+ const pt=(v,i)=>[i/(hist.length-1)*w,h-pad-(v/max)*(h-2*pad)],A=`rgb(${rgb.a})`;
+ const g=x.createLinearGradient(0,0,0,h);g.addColorStop(0,`rgba(${rgb.a},.32)`);g.addColorStop(1,`rgba(${rgb.a},0)`);
+ x.beginPath();hist.forEach((v,i)=>{const[a,b]=pt(v,i);i?x.lineTo(a,b):x.moveTo(a,b)});x.lineTo(w,h);x.lineTo(0,h);x.closePath();x.fillStyle=g;x.fill();
+ x.beginPath();hist.forEach((v,i)=>{const[a,b]=pt(v,i);i?x.lineTo(a,b):x.moveTo(a,b)});x.strokeStyle=A;x.lineWidth=2;x.stroke();
+ const[hx,hy]=pt(hist[hist.length-1],hist.length-1);x.fillStyle=T.v.c;x.shadowColor=T.v.c;x.shadowBlur=10;x.beginPath();x.arc(hx-3,hy,3.5,0,7);x.fill();x.shadowBlur=0}
+let last=performance.now();
+function frame(t){const dt=(t-last)/1000;last=t;
+ if(!reduce){tokClock+=dt*speed;while(tokClock>=1){tokClock-=1;for(let i=0;i<8;i++)heat[(Math.random()*256)|0]=1}
+  speed=6.4+Math.sin(t/2600)*1.8+Math.sin(t/700)*.4;if(((t/60)|0)%5===0&&Math.random()<.3){hist.push(speed);hist.shift()}
+  document.getElementById("tps").textContent=speed.toFixed(1)}
+ drawHeat(t);drawSpark();requestAnimationFrame(frame)}
+setTheme("forge");requestAnimationFrame(frame);
+</script>
+</body>
+</html>

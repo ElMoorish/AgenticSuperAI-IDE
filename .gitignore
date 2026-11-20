@@ -12,3 +12,6 @@ __pycache__/
 apps/shell/src-tauri/gen/
 apps/shell/dist/
 apps/shell/src-tauri/target/
+
+# third-party agent skills (installed locally, not part of the product)
+.claude/skills/
