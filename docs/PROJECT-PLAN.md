@@ -142,6 +142,12 @@ One cold run unless noted; the 120B download was running in the background durin
 Reading: a dense 27B on this machine generates about 1.4 tok/s (a few seconds for a short answer, minutes for a long one) and
 processes prompts at about 4 tok/s, so a first agent request of about 900 tokens would take roughly four minutes. MTP drafting
 accepted 87% of its guesses but was about four times SLOWER here, so use the plain path (the MTP file also runs without it).
+
+**Through the IDE (real window, plain decoding, 120B download running at the same time):** the task "change one word in
+README.md, read the file first" finished correctly in 464 s (7 min 44 s): read_file, then one edit that I accepted, README
+changed as asked. First request: 877 prompt tokens in 105 s (8.3 tok/s). Generation 0.57, 0.56 and later 0.15 tok/s; the
+slow last request overlapped heavy disk use by the download, so treat it as a worst case. Usable for patient, small edits;
+not for interactive back-and-forth.
 Not measured: other `-ngl` values, a non-MTP file, MTP without the background download.
 
 ### 3.7 Working conclusions (and their limits)
