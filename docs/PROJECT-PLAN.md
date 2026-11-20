@@ -252,3 +252,25 @@ Findings:
 
 To try next: repeat the Qwen3.6 runs warm in randomised order; a smaller quant of the 35B that fits the RAM cache (about 13 GB or less);
 free RAM (another research job on this PC holds 3.8 GB); a larger read-ahead or larger-block load path in the loader.
+
+### 7.1 Warm repeat, Qwen3.6-35B-A3B Q4_K_P (file already in the OS cache, 3 repeats, shuffled order)
+
+| `-ncmoe` | threads | Prompt (tok/s) | Generate (tok/s) |
+|---|---|---|---|
+| 32 | 12 | 7.9 | **15.4** |
+| 32 | 6 | 7.9 | 14.1 |
+| 29 | 6 | 12.2 | 9.6 |
+| 29 | 12 | 9.3 | 9.3 |
+| 36 | 12 | 7.8 | 8.4 |
+| 36 | 6 | 8.1 | 7.5 |
+| 40 | 12 | 5.8 | 6.3 |
+| 40 | 6 | 4.1 | 3.0 |
+
+Best generation setting on this PC: 32 expert layers on CPU. Twelve threads helped a little (15.4 vs 14.1; the spread is about 1 to 2, so this is
+weak evidence). Putting more experts on the CPU (36, 40) is slower; fewer (29) is also slower, because the GPU then has too little room.
+The cold first runs (section 7) were slower: warm file cache matters about as much as the setting.
+
+### 7.2 Model files removed (2026-11-20)
+
+To make room for safetensors tests of AirLLM, the 120B (about 62 GiB), Qwen3.6-35B-A3B with its vision file (about 22 GiB) and OLMoE (about 4 GiB)
+GGUF files were deleted at the owner's request. Kept: Qwen3.5-35B-A3B IQ4_XS and its vision file. The benchmark numbers above remain the record.
