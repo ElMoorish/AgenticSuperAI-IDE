@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { AgentPanel } from "../agent/AgentPanel";
-import { ApprovalBot } from "../agent/ApprovalBot";
+import { useOverlayRelay } from "../overlay/useOverlayRelay";
 import { EditorArea } from "../editor/EditorArea";
 import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
@@ -21,6 +21,7 @@ import { TitleBar } from "./TitleBar";
  *   .agent  = agent panel     -> Task 10 (chat, steps, gauges, composer); Task 11 approval cards
  */
 export function Shell() {
+  useOverlayRelay();
   const { sizes, collapsed } = useStore((s) => s.layout);
   const setSize = useStore((s) => s.setSize);
   const toggle = useStore((s) => s.toggleCollapsed);
@@ -80,7 +81,6 @@ export function Shell() {
       <AgentPanel collapsed={collapsed.agent} />
 
       <StatusBar />
-      <ApprovalBot />
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {paletteOpen && <CommandPalette />}
     </div>
