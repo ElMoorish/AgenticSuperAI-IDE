@@ -222,3 +222,33 @@ MoE offload comparison; Agent integration and a small end-to-end task study; Lim
 | Dependence on experimental forks | Treat them as optional backends; keep stock llama.cpp as the default |
 | Small local models fumble tool calls (seen with 9B and 4B) | Model manager recommends a coder-tuned model; keep text tool fallback and loop guard |
 | Windows-specific issues (installer, antivirus locks) | Document; test the installer on a clean VM |
+
+## 6. Heavy-model benchmarks and bottleneck findings (2026-11-20)
+
+Machine: RTX 4060 8 GB, Ryzen 5 5600X (6c/12t), 16 GB RAM (about 4 GB free), NVMe E: drive. `llama-bench` build 12359,
+`-p 128 -n 32 -r 2 -ngl 99 -fa 1`, memory-mapped model unless noted. Numbers are tok/s; the first Qwen3.6 run was cold.
+
+| Model | Setting | Prompt | Generate |
+|---|---|---|---|
+| Qwen3.6-35B-A3B Q4_K_P (23 GB) | `-ncmoe 40` (cold) | 3.5 | 3.5 |
+| | `-ncmoe 32` | 13.1 | 9.2 |
+| | `-ncmoe 29` (IDE suggestion) | 11.5 | 8.8 |
+| | `-ncmoe 32 -lm dio` | 5.5 | 5.8 |
+| | `-ncmoe 32 -t 12` | 10.0 | 11.0 |
+| gpt-oss-120b MXFP4 (65 GB) | `-ncmoe 36` | 1.8 | 1.3 |
+| | `-ncmoe 33` | 2.2 | 1.4 |
+| | `-ncmoe 36 -lm dio` | 1.25 | 0.6 |
+
+During the runs: disk read 300 to 530 MB/s on average (peak under 1 GB/s), GPU busy 16 to 33%, VRAM 7.3 to 7.6 GB, free RAM about 0.
+
+Raw drive test on the 120B file (3 GB sequential, 3000 random reads per size): sequential 8 MB reads 1.9 GB/s; random 4 KB 28 MB/s;
+64 KB 329 MB/s; 1 MB 1.1 GB/s; 8 MB 1.3 GB/s.
+
+Findings:
+1. The GPU waits for expert data. The models do not fit in RAM, so experts are paged from disk.
+2. The drive can do about 1.9 GB/s in long reads but the benchmark gets 0.3 to 0.5 GB/s: memory-mapped page faults read in small, scattered pieces.
+3. Direct I/O (`-lm dio`) is slower than the default because it gives up the OS cache.
+4. `-ncmoe` 32 vs 29 is within noise. 12 threads helped generation in one run (11.0 vs 9.2); needs a repeat.
+
+To try next: repeat the Qwen3.6 runs warm in randomised order; a smaller quant of the 35B that fits the RAM cache (about 13 GB or less);
+free RAM (another research job on this PC holds 3.8 GB); a larger read-ahead or larger-block load path in the loader.
