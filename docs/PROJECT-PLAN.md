@@ -129,6 +129,21 @@ Fixed afterwards: the IDE log (`asa.log`) now records turns, approval requests (
 contents or prompt text), accept/reject, and whether an edit was applied; covered by host tests. The approval was resolved before the test driver's click, most likely by the
 user (the window was on their screen); no auto-accept path was found in the code.
 
+### 3.6b Dense 27B through llama.cpp (Qwen3.8-27B coder fine-tune, Q4_K_M MTP file, 18.5 GB, `-ngl 20` of 64 layers)
+
+One cold run unless noted; the 120B download was running in the background during the MTP runs, which may have slowed them.
+
+| Test | Prompt tok/s | Generation tok/s |
+|---|---|---|
+| `llama-bench` pp128 / tg32 (cold) | 3.97 | 1.43 |
+| server, plain decoding, run 1 / run 2 (warm) | 1.48 (34 tokens) | 0.78 / 1.46 |
+| server, `--spec-type draft-mtp`, run 1 / run 2 | 1.32 | 0.36 / 0.29 (42 of 48 drafted tokens accepted) |
+
+Reading: a dense 27B on this machine generates about 1.4 tok/s (a few seconds for a short answer, minutes for a long one) and
+processes prompts at about 4 tok/s, so a first agent request of about 900 tokens would take roughly four minutes. MTP drafting
+accepted 87% of its guesses but was about four times SLOWER here, so use the plain path (the MTP file also runs without it).
+Not measured: other `-ngl` values, a non-MTP file, MTP without the background download.
+
 ### 3.7 Working conclusions (and their limits)
 1. Decode speed of any streaming approach is bounded by (bytes read per token) / (storage bandwidth). Dense 27B on this machine is
    expected at several seconds per token however well tuned (**estimate**, from 3.1 and 3.2, not measured on a 27B).
