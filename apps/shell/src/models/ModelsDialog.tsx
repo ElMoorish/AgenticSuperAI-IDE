@@ -41,7 +41,8 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
     try {
       const [m, e, s] = await Promise.all([findLocalModels(extra), findEngines(explicit || undefined), detectServers().catch(() => [])]);
       setModels(m); setEngines(e); setServers(s);
-      if (!explicit && e[0]) setEnginePath(e[0].path);
+      // a saved path that is not a real engine (stale or mistyped) is replaced by the first one found
+      if (e[0] && !e.some((x) => x.path === explicit)) setEnginePath(e[0].path);
     } catch (e) {
       setModels([]);
       setScanErr(normalizeError(e).message);
@@ -99,10 +100,10 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
   const launch = async () => {
     if (!sel) return;
     setMsg(null);
-    try { localStorage.setItem(ENGINE_KEY, enginePath); } catch { /* ignore */ }
     try {
       await launchModel({ engine: enginePath, model: sel.path, alias: form.alias.trim(), mmproj: sel.mmproj, ctx: Number(form.ctx), ngl: Number(form.ngl), nCpuMoe: Number(form.moe), port: Number(form.port) });
       connected.current = "";
+      try { localStorage.setItem(ENGINE_KEY, enginePath); } catch { /* ignore */ }
     } catch (e) {
       setMsg(normalizeError(e).message);
     }

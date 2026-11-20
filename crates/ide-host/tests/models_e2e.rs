@@ -30,3 +30,12 @@ async fn find_read_launch_stop() {
     srv.stop().await;
     assert_eq!(srv.status().state, "stopped");
 }
+
+#[test]
+#[ignore]
+fn engines_on_this_machine() {
+    let mounts = ide_host::models::mount_points();
+    println!("mounts={mounts:?}");
+    let e = ide_host::models::find_engines(None, std::env::var("PATH").ok().as_deref(), None, &mounts);
+    println!("engines={e:?}");
+}
