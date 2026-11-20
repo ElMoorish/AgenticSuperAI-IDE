@@ -14,7 +14,7 @@ No cloud, no account, no API bill. Bring a GGUF file or a Hugging Face model fol
 </div>
 
 > The screenshots on this page were taken from the real IDE, using a scripted stand-in model so the output is repeatable.
-> They show the interface, not model quality or speed. Real speeds are in [Measured speeds](#measured-speeds).
+> They show the interface, not model quality or speed (the tok/s in the engine strip is the stand-in's scripted pace). Real speeds are in [Measured speeds](#measured-speeds).
 
 ## Why this exists
 
@@ -39,31 +39,20 @@ asking before it changes anything.
 The Models dialog (the model chip in the title bar, or the boxes icon in the left bar) scans your drives, Ollama, LM Studio
 and the Hugging Face cache, and lists everything it finds with its size and quantization.
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
 ### GGUF files with llama.cpp
 
 Best for daily use. The IDE reads the GGUF header (layers, experts, context length) and your GPU memory, then suggests settings.
 For mixture-of-experts models too big for the GPU, it keeps the attention layers on the GPU and moves some expert layers to
 system memory, so a 35B model can run on 8 GB of VRAM.
 
-<img src="docs/images/models-gguf.png" alt="Models dialog with a GGUF model selected and a suggested number of expert layers on CPU" width="100%">
-
-</td>
-<td width="50%" valign="top">
+<img src="docs/images/models-gguf.png" alt="Models dialog with a GGUF model selected and a suggested number of expert layers on CPU" width="900">
 
 ### Safetensors folders with AirLLM
 
 For trying models far larger than your GPU or RAM. AirLLM streams one layer at a time from disk, so it is slow, and the
 dialog says how slow in plain words before you start. Use it to test a big model, not for daily work.
 
-<img src="docs/images/models-airllm.png" alt="Models dialog with a safetensors model selected, showing a speed warning and AirLLM settings" width="100%">
-
-</td>
-</tr>
-</table>
+<img src="docs/images/models-airllm.png" alt="Models dialog with a safetensors model selected, showing a speed warning and AirLLM settings" width="900">
 
 Both start from the same dialog, show the server log while the model loads, and connect the IDE when the server reports ready.
 The agent does not care which one is behind the endpoint.
