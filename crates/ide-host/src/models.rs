@@ -158,6 +158,11 @@ pub fn known_roots(home: &Path) -> Vec<(PathBuf, &'static str)> {
     ]
 }
 
+/// Drive roots / mount points of this machine.
+pub fn mount_points() -> Vec<PathBuf> {
+    sysinfo::Disks::new_with_refreshed_list().list().iter().map(|d| d.mount_point().to_path_buf()).collect()
+}
+
 /// `<mount>/models` for each drive or mount point that has one (the usual place people keep GGUF files).
 pub fn mount_model_dirs(mounts: &[PathBuf]) -> Vec<PathBuf> {
     mounts.iter().map(|m| m.join("models")).filter(|p| p.is_dir()).collect()
@@ -169,7 +174,7 @@ pub fn find_models(home: Option<&Path>, extra_dirs: &[PathBuf]) -> Vec<LocalMode
     for d in extra_dirs {
         all.extend(scan_dir(d, "folder"));
     }
-    let mounts: Vec<PathBuf> = sysinfo::Disks::new_with_refreshed_list().list().iter().map(|d| d.mount_point().to_path_buf()).collect();
+    let mounts = mount_points();
     for d in mount_model_dirs(&mounts) {
         all.extend(scan_dir(&d, "folder"));
     }
@@ -186,7 +191,7 @@ pub fn find_models(home: Option<&Path>, extra_dirs: &[PathBuf]) -> Vec<LocalMode
 }
 
 /// Look for `llama-server` (and friends): an explicit path first, then PATH, then usual folders.
-pub fn find_engines(explicit: Option<&Path>, path_var: Option<&str>, home: Option<&Path>) -> Vec<Engine> {
+pub fn find_engines(explicit: Option<&Path>, path_var: Option<&str>, home: Option<&Path>, mounts: &[PathBuf]) -> Vec<Engine> {
     let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
     let mut found: Vec<Engine> = Vec::new();
     let mut add = |p: PathBuf| {
@@ -211,7 +216,21 @@ pub fn find_engines(explicit: Option<&Path>, path_var: Option<&str>, home: Optio
             add(h.join(sub).join(exe));
         }
     }
+    for m in mounts {
+        for sub in ["tools/llama.cpp", "tools/llama.cpp/build/bin", "llama.cpp", "llama.cpp/build/bin", "llama-cpp", "tools/llama-cpp"] {
+            add(m.join(sub).join(exe));
+        }
+    }
     found
+}
+
+/// The llama-server program for a path that may be the program itself or the folder holding it.
+pub fn resolve_engine(p: &Path) -> PathBuf {
+    if p.is_dir() {
+        p.join(if cfg!(windows) { "llama-server.exe" } else { "llama-server" })
+    } else {
+        p.to_path_buf()
+    }
 }
 
 // ---- GGUF header ----
@@ -399,11 +418,18 @@ mod tests {
         let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
         std::fs::write(d.path().join(exe), b"x").unwrap();
         let pv = d.path().to_string_lossy().to_string();
-        let a = find_engines(None, Some(&pv), None);
+        let a = find_engines(None, Some(&pv), None, &[]);
         assert_eq!(a.len(), 1);
-        let b = find_engines(Some(d.path()), Some(&pv), None);
+        let b = find_engines(Some(d.path()), Some(&pv), None, &[]);
         assert_eq!(b.len(), 1, "same file is listed once");
-        assert!(find_engines(None, Some("Z:/nowhere"), None).is_empty());
+        assert!(find_engines(None, Some("Z:/nowhere"), None, &[]).is_empty());
+        // found under a drive root, and a folder path resolves to the program inside
+        let m = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(m.path().join("tools/llama.cpp")).unwrap();
+        std::fs::write(m.path().join("tools/llama.cpp").join(exe), b"x").unwrap();
+        assert_eq!(find_engines(None, None, None, &[m.path().to_path_buf()]).len(), 1);
+        assert_eq!(resolve_engine(&m.path().join("tools/llama.cpp")), m.path().join("tools/llama.cpp").join(exe));
+        assert_eq!(resolve_engine(Path::new("x.exe")), PathBuf::from("x.exe"));
     }
 
     fn kv_str(buf: &mut Vec<u8>, k: &str, v: &str) {

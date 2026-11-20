@@ -1603,7 +1603,8 @@ impl AppState {
     pub async fn find_engines(&self, explicit: Option<String>) -> Result<Vec<Engine>, AppError> {
         tokio::task::spawn_blocking(move || {
             let ex = explicit.filter(|e| !e.trim().is_empty()).map(PathBuf::from);
-            models::find_engines(ex.as_deref(), std::env::var("PATH").ok().as_deref(), home_dir().as_deref())
+            let mounts = models::mount_points();
+            models::find_engines(ex.as_deref(), std::env::var("PATH").ok().as_deref(), home_dir().as_deref(), &mounts)
         })
         .await
         .map_err(|e| AppError::new("io", e.to_string()))

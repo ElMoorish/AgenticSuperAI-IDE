@@ -54,7 +54,7 @@ pub fn build_args(o: &LaunchOpts) -> Vec<String> {
 
 /// The program must be a file called llama-server, the model a .gguf file or an Ollama blob, and the port non-privileged.
 pub fn validate(o: &LaunchOpts) -> Result<(), String> {
-    let exe = PathBuf::from(&o.engine);
+    let exe = crate::models::resolve_engine(&PathBuf::from(&o.engine));
     let stem = exe.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if !exe.is_file() || !stem.starts_with("llama-server") {
         return Err("engine must be an existing llama-server program".into());
@@ -125,7 +125,7 @@ impl ModelServer {
         validate(&o)?;
         self.stop().await;
         self.log.lock().unwrap().clear();
-        let mut cmd = Command::new(&o.engine);
+        let mut cmd = Command::new(crate::models::resolve_engine(&PathBuf::from(&o.engine)));
         cmd.args(build_args(&o)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
