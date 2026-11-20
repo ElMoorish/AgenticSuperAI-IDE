@@ -9,6 +9,8 @@ pub use acp::{AcpError, AgentEvent};
 pub use supervisor::{AgentConfig, Supervisor};
 pub use workspace::{FsError, Workspace};
 pub mod probe;
+pub mod models;
+pub mod launcher;
 pub mod settings;
 pub mod watcher;
 pub mod pending;

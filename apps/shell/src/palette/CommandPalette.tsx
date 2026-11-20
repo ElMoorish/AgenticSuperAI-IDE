@@ -3,6 +3,7 @@ import { useAgent } from "../agent/agentStore";
 import { models } from "../editor/models";
 import { searchFiles } from "../ipc";
 import { useSettingsDialog } from "../settings/dialogStore";
+import { useModelsDialog } from "../models/ModelsDialog";
 import { useStore } from "../state/store";
 import { usePalette } from "./paletteStore";
 
@@ -44,6 +45,7 @@ export function CommandPalette() {
     const st = () => useStore.getState();
     const list: Array<[string, string, () => void]> = [
       ["Open settings", "", () => useSettingsDialog.getState().open()],
+      ["Find and start a model", "", () => useModelsDialog.getState().open()],
       ["Toggle file explorer", "Ctrl+B", () => st().toggleCollapsed("filePanel")],
       ["Toggle terminal panel", "Ctrl+J", () => st().toggleCollapsed("bottom")],
       ["Toggle agent panel", "Ctrl+Alt+B", () => st().toggleCollapsed("agent")],

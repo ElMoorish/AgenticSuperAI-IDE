@@ -14,6 +14,8 @@ use ide_host::log::{diagnostics, DiagnosticsInput, RotatingLog};
 use ide_host::recovery::{RecoveredBuffer, RecoveryStore};
 use ide_host::pending::{Pending, PendingStore, Resolution};
 use ide_host::files::{read_stamped, write_atomic, write_atomic_create_new, FileStamp, WriteError};
+use ide_host::launcher::{LaunchOpts, ModelServer, ServerStatus};
+use ide_host::models::{self, Engine, GgufInfo, LocalModel, Suggestion};
 use ide_host::probe::{self, DetectedServer, ProbeResult};
 use ide_host::settings::Settings;
 use ide_host::supervisor::{AgentConfig, EventRx};
@@ -1070,6 +1072,7 @@ pub struct AppState {
     terms: Arc<Mutex<HashMap<u64, Arc<UserPty>>>>,
     next_term: AtomicU64,
     log: Arc<RotatingLog>,
+    model_server: Arc<ModelServer>,
 }
 
 impl AppState {
@@ -1090,6 +1093,7 @@ impl AppState {
             confirm_timeout: Duration::from_secs(30),
             terms: Arc::new(Mutex::new(HashMap::new())),
             next_term: AtomicU64::new(1),
+            model_server: Arc::new(ModelServer::new()),
         }
     }
 
@@ -1305,6 +1309,7 @@ impl AppState {
         if let Some(old) = old {
             old.shutdown().await;
         }
+        self.model_server.stop().await;
         let ptys: Vec<Arc<UserPty>> = self.terms.lock().unwrap().drain().map(|(_, p)| p).collect();
         for p in ptys {
             p.kill();
@@ -1585,6 +1590,54 @@ impl AppState {
             .map_err(|e| AppError::new("io", e.to_string()))
     }
 
+    // ---- local models and engines
+
+    /// Model files from the given folders plus the usual tool folders (Ollama, LM Studio, Hugging Face cache).
+    pub async fn find_local_models(&self, dirs: Vec<String>) -> Result<Vec<LocalModel>, AppError> {
+        let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| !d.trim().is_empty()).map(PathBuf::from).collect();
+        tokio::task::spawn_blocking(move || models::find_models(home_dir().as_deref(), &dirs))
+            .await
+            .map_err(|e| AppError::new("io", e.to_string()))
+    }
+
+    pub async fn find_engines(&self, explicit: Option<String>) -> Result<Vec<Engine>, AppError> {
+        tokio::task::spawn_blocking(move || {
+            let ex = explicit.filter(|e| !e.trim().is_empty()).map(PathBuf::from);
+            models::find_engines(ex.as_deref(), std::env::var("PATH").ok().as_deref(), home_dir().as_deref())
+        })
+        .await
+        .map_err(|e| AppError::new("io", e.to_string()))
+    }
+
+    /// What the file's header says, and suggested launch settings for this machine's GPU.
+    pub async fn model_info(&self, path: String) -> Result<ModelInfoDto, AppError> {
+        tokio::task::spawn_blocking(move || {
+            let p = PathBuf::from(&path);
+            let size = std::fs::metadata(&p).map(|m| m.len()).map_err(|_| AppError::bad_request("model file not found"))?;
+            let info = models::read_gguf_info(&p).unwrap_or_default();
+            let vram = probe::gpu_memory().map(|(_, total)| total);
+            Ok(ModelInfoDto { info, suggestion: models::suggest(size, vram, &info), vram_mib: vram })
+        })
+        .await
+        .map_err(|e| AppError::new("io", e.to_string()))?
+    }
+
+    pub async fn launch_model(&self, opts: LaunchOpts) -> Result<(), AppError> {
+        self.model_server.start(opts).await.map_err(AppError::bad_request)
+    }
+
+    pub async fn stop_model(&self) {
+        self.model_server.stop().await;
+    }
+
+    pub async fn model_server_status(&self) -> ServerStatus {
+        // `status` does a short blocking HTTP check while starting.
+        let st = self.model_server.clone();
+        tokio::task::spawn_blocking(move || st.status()).await.unwrap_or_else(|_| ServerStatus {
+            state: "stopped".into(), model: None, port: None, seconds: 0, exit_code: None, log: vec![],
+        })
+    }
+
     // ---- user terminals
 
     /// Start the user's shell on a pty. `out` receives raw output bytes (return false when
@@ -1685,6 +1738,18 @@ pub async fn run_gpu_loop(state: Arc<AppState>) {
             state.emit(UiEvent::Gpu { used_mib: used, total_mib: total });
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfoDto {
+    pub info: GgufInfo,
+    pub suggestion: Suggestion,
+    pub vram_mib: Option<u32>,
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from)
 }
 
 /// Emit `Sys` events every ~2 s while a window listener exists.

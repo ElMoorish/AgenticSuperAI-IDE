@@ -51,6 +51,15 @@ export function installMockHost(): void {
 
   const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
     get_settings: () => settings,
+    find_local_models: () => [
+      { name: "Qwen3.6-35B-A3B-Q4_K_P", path: "demo/qwen36.gguf", size_bytes: 23e9, quant: "Q4_K_P", source: "folder", mmproj: "demo/mmproj.gguf" },
+      { name: "llama3:8b", path: "demo/blob", size_bytes: 4.7e9, quant: null, source: "ollama", mmproj: null },
+    ],
+    find_engines: () => [{ name: "llama-server", path: "C:/llama.cpp/llama-server.exe" }],
+    model_info: () => ({ info: { block_count: 40, expert_count: 128, context_length: 262144 }, suggestion: { ngl: 99, n_cpu_moe: 28, ctx: 16384, fits_gpu: false }, vramMib: 8188 }),
+    launch_model: () => null,
+    stop_model: () => null,
+    model_server_status: () => ({ state: "stopped", model: null, port: null, seconds: 0, exitCode: null, log: [] }),
     set_settings: (a) => Object.assign(settings, a.settings),
     pick_folder: () => "C:/demo",
     open_folder: (a) => ({ root: String(a.path), name: "demo" }),

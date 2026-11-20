@@ -174,3 +174,34 @@ pub fn recovery_list(state: S<'_>) -> Result<Vec<ide_host::recovery::RecoveredBu
 pub fn recovery_clear(state: S<'_>, rel: String) -> Result<(), AppError> {
     state.recovery_clear(&rel)
 }
+
+#[tauri::command]
+pub async fn find_local_models(state: S<'_>, dirs: Vec<String>) -> Result<Vec<ide_host::models::LocalModel>, AppError> {
+    state.find_local_models(dirs).await
+}
+
+#[tauri::command]
+pub async fn find_engines(state: S<'_>, explicit: Option<String>) -> Result<Vec<ide_host::models::Engine>, AppError> {
+    state.find_engines(explicit).await
+}
+
+#[tauri::command]
+pub async fn model_info(state: S<'_>, path: String) -> Result<crate::state::ModelInfoDto, AppError> {
+    state.model_info(path).await
+}
+
+#[tauri::command]
+pub async fn launch_model(state: S<'_>, opts: ide_host::launcher::LaunchOpts) -> Result<(), AppError> {
+    state.launch_model(opts).await
+}
+
+#[tauri::command]
+pub async fn stop_model(state: S<'_>) -> Result<(), AppError> {
+    state.stop_model().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn model_server_status(state: S<'_>) -> Result<ide_host::launcher::ServerStatus, AppError> {
+    Ok(state.model_server_status().await)
+}

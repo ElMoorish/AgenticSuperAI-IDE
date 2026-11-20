@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Files, Play, Search, Settings } from "lucide-react";
+import { Boxes, Files, Play, Search, Settings } from "lucide-react";
 import { AgentPanel } from "../agent/AgentPanel";
 import { useOverlayRelay } from "../overlay/useOverlayRelay";
 import { EditorArea } from "../editor/EditorArea";
@@ -10,6 +10,7 @@ import { StatusBar } from "./StatusBar";
 import { CommandPalette } from "../palette/CommandPalette";
 import { usePalette } from "../palette/paletteStore";
 import { SettingsDialog } from "../settings/SettingsDialog";
+import { ModelsDialog, useModelsDialog } from "../models/ModelsDialog";
 import { useSettingsDialog } from "../settings/dialogStore";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { TitleBar } from "./TitleBar";
@@ -54,6 +55,8 @@ export function Shell() {
   const paletteOpen = usePalette((s) => s.isOpen);
   const settingsOpen = useSettingsDialog((s) => s.isOpen);
   const closeSettings = useSettingsDialog((s) => s.close);
+  const modelsOpen = useModelsDialog((s) => s.isOpen);
+  const closeModels = useModelsDialog((s) => s.close);
 
   return (
     <div className="ide" style={style}>
@@ -62,6 +65,7 @@ export function Shell() {
       <nav className="rail" aria-label="Activity bar">
         <button type="button" aria-label="Explorer" aria-pressed={!collapsed.filePanel} title="Explorer (Ctrl+B)" onClick={() => toggle("filePanel")}><Files size={18} aria-hidden="true" /></button>
         <button type="button" aria-label="Search" title="Search (coming later)" disabled><Search size={18} aria-hidden="true" /></button>
+        <button type="button" aria-label="Models" title="Models: find and start a local model" onClick={() => useModelsDialog.getState().open()}><Boxes size={18} aria-hidden="true" /></button>
         <button type="button" aria-label="Settings" title="Settings" onClick={() => useSettingsDialog.getState().open()}><Settings size={18} aria-hidden="true" /></button>
         <button type="button" aria-label="Run" title="Run (coming later)" disabled><Play size={18} aria-hidden="true" /></button>
       </nav>
@@ -85,6 +89,7 @@ export function Shell() {
       <EngineStrip />
       <StatusBar />
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
+      {modelsOpen && <ModelsDialog onClose={closeModels} />}
       {paletteOpen && <CommandPalette />}
     </div>
   );

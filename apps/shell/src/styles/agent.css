@@ -236,3 +236,26 @@ body.overlay { margin: 0; overflow: hidden; background: var(--raise); }
 @keyframes asa-blink { 50% { opacity: 0; } }
 @media (max-width: 900px) { .engine { grid-template-columns: 1fr; height: auto; } .epane:nth-child(n+2) { display: none; } }
 @media (prefers-reduced-motion: reduce) { .pipe::after, .avoice::after { animation: none !important; } }
+
+/* ---- models dialog ---- */
+.models-modal { width: min(44rem, 94vw); max-height: 90vh; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; gap: 0.625rem; }
+.models-modal h3 { display: flex; align-items: center; gap: 0.5rem; margin: 0; }
+.mrow { display: flex; flex-direction: column; gap: 0.3125rem; }
+.mdirs { display: flex; flex-wrap: wrap; gap: 0.3125rem; }
+.mdir { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.125rem 0.5rem; border: 1px solid var(--line); border-radius: var(--radius); font: 0.75rem var(--font-mono); color: var(--text); }
+.mdir button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 0.125rem; }
+.mpick { display: flex; gap: 0.375rem; }
+.mpick input { flex: 1; min-width: 0; }
+.mpick button, .models-modal .modal-actions button { display: inline-flex; align-items: center; gap: 0.375rem; }
+.mlist { list-style: none; margin: 0; padding: 0; max-height: 11rem; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.mlist li + li { border-top: 1px solid var(--line); }
+.mlist button { width: 100%; display: grid; grid-template-columns: 1fr auto auto; gap: 0.75rem; align-items: center; text-align: left; background: transparent; color: var(--text); border: 0; padding: 0.375rem 0.625rem; cursor: pointer; font: inherit; font-size: 0.8125rem; }
+.mlist button:hover { background: var(--raise); }
+.mlist button.sel { background: var(--raise); box-shadow: inset 3px 0 0 var(--accent); }
+.mlist b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.mmeta { color: var(--muted); font: 0.75rem var(--font-mono); white-space: nowrap; }
+.msrc { color: var(--accent-2); font-size: 0.6875rem; white-space: nowrap; }
+.mgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 0.5rem; }
+.mgrid .sfield input { min-width: 0; width: 100%; box-sizing: border-box; }
+.mlog { margin: 0; max-height: 9rem; overflow: auto; padding: 0.5rem; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); font: 0.6875rem var(--font-mono); color: var(--muted); white-space: pre-wrap; }
+@media (max-width: 700px) { .mgrid { grid-template-columns: 1fr 1fr; } }
