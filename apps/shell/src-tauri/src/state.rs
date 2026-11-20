@@ -15,7 +15,7 @@ use ide_host::recovery::{RecoveredBuffer, RecoveryStore};
 use ide_host::pending::{Pending, PendingStore, Resolution};
 use ide_host::files::{read_stamped, write_atomic, write_atomic_create_new, FileStamp, WriteError};
 use ide_host::launcher::{LaunchOpts, ModelServer, ServerStatus};
-use ide_host::models::{self, Engine, GgufInfo, LocalModel, Suggestion};
+use ide_host::models::{self, AirllmEnv, Engine, GgufInfo, LocalModel, Suggestion};
 use ide_host::probe::{self, DetectedServer, ProbeResult};
 use ide_host::settings::Settings;
 use ide_host::supervisor::{AgentConfig, EventRx};
@@ -1621,6 +1621,12 @@ impl AppState {
         })
         .await
         .map_err(|e| AppError::new("io", e.to_string()))?
+    }
+
+    /// AirLLM's Python program and our server script, if both are present.
+    pub async fn find_airllm(&self) -> Option<AirllmEnv> {
+        let start = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();
+        tokio::task::spawn_blocking(move || models::find_airllm(&models::mount_points(), &start)).await.ok().flatten()
     }
 
     pub async fn launch_model(&self, opts: LaunchOpts) -> Result<(), AppError> {

@@ -12,7 +12,7 @@ export const COMMANDS = [
   "agent_prompt", "agent_cancel", "resolve_approval", "confirm_edit", "probe_endpoint", "detect_servers",
   "get_settings", "set_settings", "start_user_terminal", "terminal_write", "terminal_resize",
   "close_terminal", "search_files", "copy_diagnostics", "recovery_save", "recovery_list", "recovery_clear",
-  "find_local_models", "find_engines", "model_info", "launch_model", "stop_model", "model_server_status",
+  "find_local_models", "find_engines", "find_airllm", "model_info", "launch_model", "stop_model", "model_server_status",
 ] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -165,17 +165,19 @@ export const confirmEdit = (id: number, ok: boolean, error?: string) => call<voi
 /** `apiKey` undefined = use the saved key. */
 export const probeEndpoint = (url: string, apiKey?: string) => call<ProbeResult>("probe_endpoint", { url, apiKey });
 export const detectServers = () => call<DetectedServer[]>("detect_servers");
-export interface LocalModel { name: string; path: string; size_bytes: number; quant: string | null; source: string; mmproj: string | null }
+export interface LocalModel { name: string; path: string; size_bytes: number; quant: string | null; source: string; mmproj: string | null; kind: "gguf" | "safetensors" }
+export interface AirllmEnv { python: string; server: string }
 export interface Engine { name: string; path: string }
 export interface ModelInfo {
   info: { block_count: number | null; expert_count: number | null; context_length: number | null };
   suggestion: { ngl: number; n_cpu_moe: number; ctx: number; fits_gpu: boolean };
   vramMib: number | null;
 }
-export interface LaunchOpts { engine: string; model: string; alias: string; mmproj: string | null; ctx: number; ngl: number; nCpuMoe: number; port: number }
+export interface LaunchOpts { backend?: "llamacpp" | "airllm"; engine: string; server?: string | null; compression?: string | null; vramGb?: number | null; model: string; alias: string; mmproj: string | null; ctx: number; ngl: number; nCpuMoe: number; port: number }
 export interface ServerStatus { state: "stopped" | "starting" | "ready" | "exited"; model: string | null; port: number | null; seconds: number; exitCode: number | null; log: string[] }
 export const findLocalModels = (dirs: string[]) => call<LocalModel[]>("find_local_models", { dirs });
 export const findEngines = (explicit?: string) => call<Engine[]>("find_engines", { explicit: explicit ?? null });
+export const findAirllm = () => call<AirllmEnv | null>("find_airllm");
 export const modelInfo = (path: string) => call<ModelInfo>("model_info", { path });
 export const launchModel = (opts: LaunchOpts) => call<void>("launch_model", { opts });
 export const stopModel = () => call<void>("stop_model");

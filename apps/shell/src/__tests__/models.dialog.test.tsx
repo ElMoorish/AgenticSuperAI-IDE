@@ -32,7 +32,25 @@ describe("models helpers", () => {
   });
 
   it("alias keeps only safe characters", () => {
-    expect(aliasFor({ name: "Qwen 3.6 (Q4)", path: "", size_bytes: 1, quant: null, source: "folder", mmproj: null })).toBe("Qwen-3.6-Q4");
-    expect(aliasFor({ name: "***", path: "", size_bytes: 1, quant: null, source: "folder", mmproj: null })).toBe("model");
+    expect(aliasFor({ name: "Qwen 3.6 (Q4)", path: "", size_bytes: 1, quant: null, source: "folder", mmproj: null, kind: "gguf" })).toBe("Qwen-3.6-Q4");
+    expect(aliasFor({ name: "***", path: "", size_bytes: 1, quant: null, source: "folder", mmproj: null, kind: "gguf" })).toBe("model");
+  });
+});
+
+import { airllmNote, validateAirllm } from "../models/modelsLib";
+describe("airllm form", () => {
+  const f = { port: "8090", ctx: "4096", vram: "4", compression: "4bit", alias: "m" };
+  it("accepts a good form and names the first problem otherwise", () => {
+    expect(validateAirllm(f)).toBeNull();
+    expect(validateAirllm({ ...f, port: "22" })).toMatch(/Port/);
+    expect(validateAirllm({ ...f, ctx: "10" })).toMatch(/Context/);
+    expect(validateAirllm({ ...f, vram: "99" })).toMatch(/GPU memory/);
+    expect(validateAirllm({ ...f, vram: "" })).toBeNull();
+    expect(validateAirllm({ ...f, compression: "2bit" })).toMatch(/compression/i);
+    expect(validateAirllm({ ...f, alias: "" })).toMatch(/name/);
+  });
+  it("warns about speed in plain numbers", () => {
+    expect(airllmNote(80e9, "4bit")).toMatch(/24 GB/);
+    expect(airllmNote(80e9, "none")).toMatch(/80 GB/);
   });
 });

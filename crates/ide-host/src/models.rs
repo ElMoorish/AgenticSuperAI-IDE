@@ -20,6 +20,8 @@ pub struct LocalModel {
     pub source: String,
     /// A vision projector file sitting next to the model, if any.
     pub mmproj: Option<String>,
+    /// "gguf" (llama.cpp) or "safetensors" (a Hugging Face folder, for AirLLM).
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -82,7 +84,7 @@ pub fn scan_dir(dir: &Path, source: &str) -> Vec<LocalModel> {
         let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
         let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let mmproj = mmprojs.iter().find(|m| m.parent() == p.parent()).map(|m| m.to_string_lossy().to_string());
-        out.push(LocalModel { quant: quant_from_name(&stem), name: stem, path: p.to_string_lossy().to_string(), size_bytes: size, source: source.into(), mmproj });
+        out.push(LocalModel { quant: quant_from_name(&stem), name: stem, path: p.to_string_lossy().to_string(), size_bytes: size, source: source.into(), mmproj, kind: "gguf".into() });
     }
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     out
@@ -128,6 +130,7 @@ pub fn scan_ollama(root: &Path) -> Vec<LocalModel> {
             quant: quant_from_name(&tag),
             source: "ollama".into(),
             mmproj: None,
+            kind: "gguf".into(),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -165,7 +168,59 @@ pub fn mount_points() -> Vec<PathBuf> {
 
 /// `<mount>/models` for each drive or mount point that has one (the usual place people keep GGUF files).
 pub fn mount_model_dirs(mounts: &[PathBuf]) -> Vec<PathBuf> {
-    mounts.iter().map(|m| m.join("models")).filter(|p| p.is_dir()).collect()
+    mounts.iter().flat_map(|m| [m.join("models"), m.join("airllm-test")]).filter(|p| p.is_dir()).collect()
+}
+
+/// Hugging Face model folders (`config.json` plus `*.safetensors`) in `dir` or up to two levels below it.
+pub fn scan_safetensors(dir: &Path) -> Vec<LocalModel> {
+    let mut out = Vec::new();
+    scan_st(dir, 0, &mut out);
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+fn scan_st(dir: &Path, depth: usize, out: &mut Vec<LocalModel>) {
+    if depth > 2 || out.len() >= 100 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut size = 0u64;
+    let mut has_st = false;
+    let mut subdirs = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            subdirs.push(p);
+        } else if p.extension().map_or(false, |x| x.eq_ignore_ascii_case("safetensors")) {
+            has_st = true;
+            size += e.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    if has_st && dir.join("config.json").is_file() {
+        let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        out.push(LocalModel { name, path: dir.to_string_lossy().to_string(), size_bytes: size, quant: None, source: "folder".into(), mmproj: None, kind: "safetensors".into() });
+        return; // do not look inside a model folder (AirLLM's split copy lives there)
+    }
+    for d in subdirs {
+        scan_st(&d, depth + 1, out);
+    }
+}
+
+/// The Python program and server script needed to run AirLLM.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AirllmEnv {
+    pub python: String,
+    pub server: String,
+}
+
+/// Look for a Python environment with AirLLM (`<mount>/airllm-test/venv`) and our server script (`tools/airllm-server/server.py`
+/// in a folder at or above `start`).
+pub fn find_airllm(mounts: &[PathBuf], start: &Path) -> Option<AirllmEnv> {
+    let py_rel = if cfg!(windows) { "venv/Scripts/python.exe" } else { "venv/bin/python" };
+    let python = mounts.iter().map(|m| m.join("airllm-test").join(py_rel)).find(|p| p.is_file())?;
+    let server = start.ancestors().map(|a| a.join("tools").join("airllm-server").join("server.py")).find(|p| p.is_file())?;
+    Some(AirllmEnv { python: python.to_string_lossy().to_string(), server: server.to_string_lossy().to_string() })
 }
 
 /// Everything found: the user's own folders, the known tool folders, and Ollama's store.
@@ -173,10 +228,12 @@ pub fn find_models(home: Option<&Path>, extra_dirs: &[PathBuf]) -> Vec<LocalMode
     let mut all: Vec<LocalModel> = Vec::new();
     for d in extra_dirs {
         all.extend(scan_dir(d, "folder"));
+        all.extend(scan_safetensors(d));
     }
     let mounts = mount_points();
     for d in mount_model_dirs(&mounts) {
         all.extend(scan_dir(&d, "folder"));
+        all.extend(scan_safetensors(&d));
     }
     if let Some(h) = home {
         all.extend(scan_dir(&h.join("models"), "folder"));
@@ -368,6 +425,41 @@ mod tests {
         std::fs::create_dir(d.path().join("models")).unwrap();
         let v = mount_model_dirs(&[d.path().to_path_buf(), other.path().to_path_buf()]);
         assert_eq!(v, vec![d.path().join("models")]);
+    }
+
+    #[test]
+    fn hugging_face_folders_are_found_and_not_entered() {
+        let d = tempfile::tempdir().unwrap();
+        let m = d.path().join("Qwen-4B");
+        std::fs::create_dir_all(m.join("splitted_model")).unwrap();
+        std::fs::write(m.join("config.json"), b"{}").unwrap();
+        std::fs::write(m.join("model-00001-of-00002.safetensors"), vec![0u8; 5]).unwrap();
+        std::fs::write(m.join("model-00002-of-00002.safetensors"), vec![0u8; 7]).unwrap();
+        std::fs::write(m.join("splitted_model").join("x.safetensors"), vec![0u8; 100]).unwrap();
+        std::fs::create_dir_all(d.path().join("empty")).unwrap();
+        std::fs::write(d.path().join("nocfg.safetensors"), b"x").unwrap();
+        let v = scan_safetensors(d.path());
+        assert_eq!(v.len(), 1);
+        assert_eq!((v[0].name.as_str(), v[0].size_bytes, v[0].kind.as_str()), ("Qwen-4B", 12, "safetensors"));
+    }
+
+    #[test]
+    fn airllm_needs_both_python_and_server_script() {
+        let m = tempfile::tempdir().unwrap();
+        let r = tempfile::tempdir().unwrap();
+        let py = if cfg!(windows) { "venv/Scripts/python.exe" } else { "venv/bin/python" };
+        std::fs::create_dir_all(m.path().join("airllm-test").join(py).parent().unwrap()).unwrap();
+        std::fs::write(m.path().join("airllm-test").join(py), b"x").unwrap();
+        let mounts = vec![m.path().to_path_buf()];
+        let start = r.path().join("target").join("release");
+        std::fs::create_dir_all(&start).unwrap();
+        assert!(find_airllm(&mounts, &start).is_none(), "no server script yet");
+        std::fs::create_dir_all(r.path().join("tools/airllm-server")).unwrap();
+        std::fs::write(r.path().join("tools/airllm-server/server.py"), b"x").unwrap();
+        let e = find_airllm(&mounts, &start).unwrap();
+        assert!(e.python.ends_with("python.exe") || e.python.ends_with("python"));
+        assert!(e.server.ends_with("server.py"));
+        assert!(find_airllm(&[], &start).is_none());
     }
 
     #[test]

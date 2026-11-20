@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Boxes, Play, RefreshCw, Square } from "lucide-react";
 import {
-  detectServers, findEngines, findLocalModels, getSettings, launchModel, modelInfo, modelServerStatus, normalizeError, setSettings, stopModel,
-  type DetectedServer, type Engine, type LocalModel, type ModelInfo, type ServerStatus,
+  detectServers, findAirllm, findEngines, findLocalModels, getSettings, launchModel, modelInfo, modelServerStatus, normalizeError, setSettings, stopModel,
+  type AirllmEnv, type DetectedServer, type Engine, type LocalModel, type ModelInfo, type ServerStatus,
 } from "../ipc";
 import { useStore } from "../state/store";
-import { ENGINE_KEY, SOURCE_LABEL, aliasFor, describeSuggestion, fmtSize, loadDirs, saveDirs, validateLaunch } from "./modelsLib";
+import { ENGINE_KEY, SOURCE_LABEL, aliasFor, airllmNote, describeSuggestion, fmtSize, loadDirs, saveDirs, validateAirllm, validateLaunch } from "./modelsLib";
 import { create } from "zustand";
 
 interface D { isOpen: boolean; open: () => void; close: () => void }
@@ -31,6 +31,8 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
   const [sel, setSel] = useState<LocalModel | null>(null);
   const [info, setInfo] = useState<ModelInfo | null>(null);
   const [form, setForm] = useState({ port: "8080", ctx: "16384", ngl: "99", moe: "0", alias: "" });
+  const [airllm, setAirllm] = useState<AirllmEnv | null>(null);
+  const [af, setAf] = useState({ port: "8090", ctx: "4096", vram: "4", compression: "4bit", alias: "" });
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const connected = useRef<string>("");
@@ -39,8 +41,8 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
     setScanErr(null);
     setModels(null);
     try {
-      const [m, e, s] = await Promise.all([findLocalModels(extra), findEngines(explicit || undefined), detectServers().catch(() => [])]);
-      setModels(m); setEngines(e); setServers(s);
+      const [m, e, s, a] = await Promise.all([findLocalModels(extra), findEngines(explicit || undefined), detectServers().catch(() => []), findAirllm().catch(() => null)]);
+      setModels(m); setEngines(e); setServers(s); setAirllm(a);
       // a saved path that is not a real engine (stale or mistyped) is replaced by the first one found
       if (e[0] && !e.some((x) => x.path === explicit)) setEnginePath(e[0].path);
     } catch (e) {
@@ -75,6 +77,8 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
   const pick = async (m: LocalModel) => {
     setSel(m); setInfo(null); setMsg(null);
     setForm((f) => ({ ...f, alias: aliasFor(m) }));
+    setAf((f) => ({ ...f, alias: aliasFor(m) }));
+    if (m.kind === "safetensors") return; // no GGUF header to read
     try {
       const i = await modelInfo(m.path);
       setInfo(i);
@@ -93,14 +97,20 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
   };
   const removeDir = (d: string) => { const next = dirs.filter((x) => x !== d); setDirs(next); saveDirs(next); void scan(next, enginePath); };
 
-  const formError = validateLaunch(form);
+  const isAir = sel?.kind === "safetensors";
+  const formError = isAir ? validateAirllm(af) : validateLaunch(form);
   const busy = status?.state === "starting" || status?.state === "ready";
-  const canLaunch = !!sel && !!enginePath && !formError && status?.state !== "starting";
+  const canLaunch = !!sel && (isAir ? !!airllm : !!enginePath) && !formError && status?.state !== "starting";
 
   const launch = async () => {
     if (!sel) return;
     setMsg(null);
     try {
+      if (isAir && airllm) {
+        await launchModel({ backend: "airllm", engine: airllm.python, server: airllm.server, compression: af.compression, vramGb: Number(af.vram || 0), model: sel.path, alias: af.alias.trim(), mmproj: null, ctx: Number(af.ctx), ngl: 0, nCpuMoe: 0, port: Number(af.port) });
+        connected.current = "";
+        return;
+      }
       await launchModel({ engine: enginePath, model: sel.path, alias: form.alias.trim(), mmproj: sel.mmproj, ctx: Number(form.ctx), ngl: Number(form.ngl), nCpuMoe: Number(form.moe), port: Number(form.port) });
       connected.current = "";
       try { localStorage.setItem(ENGINE_KEY, enginePath); } catch { /* ignore */ }
@@ -162,7 +172,7 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
               <li key={m.path} role="option" aria-selected={sel?.path === m.path}>
                 <button type="button" className={sel?.path === m.path ? "sel" : ""} onClick={() => void pick(m)}>
                   <b>{m.name}</b>
-                  <span className="mmeta">{fmtSize(m.size_bytes)}{m.quant ? ` · ${m.quant}` : ""}{m.mmproj ? " · vision" : ""}</span>
+                  <span className="mmeta">{fmtSize(m.size_bytes)}{m.quant ? ` · ${m.quant}` : ""}{m.mmproj ? " · vision" : ""}{m.kind === "safetensors" ? " · safetensors (AirLLM)" : ""}</span>
                   <span className="msrc">{SOURCE_LABEL[m.source] ?? m.source}</span>
                 </button>
               </li>
@@ -170,7 +180,26 @@ export function ModelsDialog({ onClose }: { onClose: () => void }) {
           </ul>
         </section>
 
-        {sel && (
+        {sel && isAir && (
+          <section className="mrow">
+            {!airllm && <div className="smsg" role="alert">AirLLM was not found. It needs a Python environment in an airllm-test\\venv folder on a drive, and the project's tools\\airllm-server folder (see its README).</div>}
+            <div className="smsg" role="status">{airllmNote(sel.size_bytes, af.compression)}</div>
+            <div className="mgrid">
+              <label className="sfield"><span>Name</span><input type="text" value={af.alias} onChange={(e) => setAf({ ...af, alias: e.target.value })} spellCheck={false} /></label>
+              <label className="sfield"><span>Port</span><input type="text" inputMode="numeric" value={af.port} onChange={(e) => setAf({ ...af, port: e.target.value })} /></label>
+              <label className="sfield"><span>Context (tokens)</span><input type="text" inputMode="numeric" value={af.ctx} onChange={(e) => setAf({ ...af, ctx: e.target.value })} /></label>
+              <label className="sfield"><span>Layers kept on GPU (GB)</span><input type="text" inputMode="decimal" value={af.vram} onChange={(e) => setAf({ ...af, vram: e.target.value })} /></label>
+              <label className="sfield"><span>Compression</span>
+                <select value={af.compression} onChange={(e) => setAf({ ...af, compression: e.target.value })}>
+                  <option value="4bit">4-bit (smallest reads)</option><option value="8bit">8-bit</option><option value="none">None</option>
+                </select>
+              </label>
+            </div>
+            {formError && <div className="smsg" role="alert">{formError}</div>}
+          </section>
+        )}
+
+        {sel && !isAir && (
           <section className="mrow">
             <div className="smsg" role="status">{info ? describeSuggestion(info.suggestion, info.vramMib) : "Reading the model file…"}</div>
             <div className="mgrid">

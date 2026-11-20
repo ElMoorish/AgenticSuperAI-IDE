@@ -49,6 +49,7 @@ fn main() {
             commands::detect_servers,
             commands::find_local_models,
             commands::find_engines,
+            commands::find_airllm,
             commands::model_info,
             commands::launch_model,
             commands::stop_model,

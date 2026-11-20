@@ -17,7 +17,20 @@ const MAX_LINE: usize = 400;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchOpts {
+    /// "llamacpp" (default) or "airllm".
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    /// llama.cpp: the llama-server program. AirLLM: the Python program.
     pub engine: String,
+    /// AirLLM only: path of tools/airllm-server/server.py.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// AirLLM only: "4bit", "8bit" or "none".
+    #[serde(default)]
+    pub compression: Option<String>,
+    /// AirLLM only: GPU memory (GB) to keep layers in permanently.
+    #[serde(default)]
+    pub vram_gb: Option<f64>,
     pub model: String,
     /// Name the server reports for the model (`--alias`).
     pub alias: String,
@@ -26,6 +39,28 @@ pub struct LaunchOpts {
     pub ngl: u32,
     pub n_cpu_moe: u32,
     pub port: u16,
+}
+
+fn default_backend() -> String {
+    "llamacpp".into()
+}
+
+/// Arguments for the AirLLM server script (`python -u server.py ...`).
+pub fn build_airllm_args(o: &LaunchOpts) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-u".into(),
+        o.server.clone().unwrap_or_default(),
+        "--model".into(), o.model.clone(),
+        "--name".into(), o.alias.clone(),
+        "--port".into(), o.port.to_string(),
+        "--compression".into(), o.compression.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| "4bit".into()),
+        "--max-seq-len".into(), o.ctx.to_string(),
+    ];
+    if let Some(v) = o.vram_gb.filter(|v| *v > 0.0) {
+        a.push("--vram-gb".into());
+        a.push(format!("{v}"));
+    }
+    a
 }
 
 /// Command-line arguments for llama-server (the same flags as config/start-llama-server.ps1).
@@ -54,6 +89,12 @@ pub fn build_args(o: &LaunchOpts) -> Vec<String> {
 
 /// The program must be a file called llama-server, the model a .gguf file or an Ollama blob, and the port non-privileged.
 pub fn validate(o: &LaunchOpts) -> Result<(), String> {
+    if o.backend == "airllm" {
+        return validate_airllm(o);
+    }
+    if o.backend != "llamacpp" {
+        return Err("unknown backend".into());
+    }
     let exe = crate::models::resolve_engine(&PathBuf::from(&o.engine));
     let stem = exe.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if !exe.is_file() || !stem.starts_with("llama-server") {
@@ -67,6 +108,34 @@ pub fn validate(o: &LaunchOpts) -> Result<(), String> {
     }
     if !(512..=1_048_576).contains(&o.ctx) {
         return Err("context size must be between 512 and 1048576".into());
+    }
+    if o.alias.trim().is_empty() || o.alias.len() > 120 {
+        return Err("model name must be 1 to 120 characters".into());
+    }
+    Ok(())
+}
+
+fn validate_airllm(o: &LaunchOpts) -> Result<(), String> {
+    let py = PathBuf::from(&o.engine);
+    let stem = py.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if !py.is_file() || !stem.starts_with("python") {
+        return Err("AirLLM needs the Python program of its environment".into());
+    }
+    if !o.server.as_deref().map_or(false, |s| PathBuf::from(s).is_file()) {
+        return Err("AirLLM server script not found (tools/airllm-server/server.py)".into());
+    }
+    let m = PathBuf::from(&o.model);
+    if !m.join("config.json").is_file() {
+        return Err("AirLLM needs a Hugging Face model folder with config.json and .safetensors files".into());
+    }
+    if !matches!(o.compression.as_deref().unwrap_or("4bit"), "4bit" | "8bit" | "none") {
+        return Err("compression must be 4bit, 8bit or none".into());
+    }
+    if o.port < 1024 {
+        return Err("port must be 1024 or higher".into());
+    }
+    if !(256..=131_072).contains(&o.ctx) {
+        return Err("context size for AirLLM must be between 256 and 131072".into());
     }
     if o.alias.trim().is_empty() || o.alias.len() > 120 {
         return Err("model name must be 1 to 120 characters".into());
@@ -125,8 +194,16 @@ impl ModelServer {
         validate(&o)?;
         self.stop().await;
         self.log.lock().unwrap().clear();
-        let mut cmd = Command::new(crate::models::resolve_engine(&PathBuf::from(&o.engine)));
-        cmd.args(build_args(&o)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        let mut cmd = if o.backend == "airllm" {
+            let mut c = Command::new(&o.engine);
+            c.args(build_airllm_args(&o)).env("PYTHONIOENCODING", "utf-8");
+            c
+        } else {
+            let mut c = Command::new(crate::models::resolve_engine(&PathBuf::from(&o.engine)));
+            c.args(build_args(&o));
+            c
+        };
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let mut child = cmd.spawn().map_err(|e| format!("could not start llama-server: {e}"))?;
@@ -198,7 +275,7 @@ mod tests {
     use super::*;
 
     fn opts() -> LaunchOpts {
-        LaunchOpts { engine: "x".into(), model: "m.gguf".into(), alias: "m".into(), mmproj: None, ctx: 8192, ngl: 99, n_cpu_moe: 0, port: 8080 }
+        LaunchOpts { backend: "llamacpp".into(), server: None, compression: None, vram_gb: None, engine: "x".into(), model: "m.gguf".into(), alias: "m".into(), mmproj: None, ctx: 8192, ngl: 99, n_cpu_moe: 0, port: 8080 }
     }
 
     #[test]
@@ -245,6 +322,48 @@ mod tests {
         let mut b = o;
         b.alias = " ".into();
         assert!(validate(&b).is_err());
+    }
+
+    #[test]
+    fn airllm_args_and_validation() {
+        let d = tempfile::tempdir().unwrap();
+        let py = d.path().join(if cfg!(windows) { "python.exe" } else { "python" });
+        let srv = d.path().join("server.py");
+        let model = d.path().join("m");
+        std::fs::create_dir(&model).unwrap();
+        std::fs::write(model.join("config.json"), b"{}").unwrap();
+        std::fs::write(&py, b"x").unwrap();
+        std::fs::write(&srv, b"x").unwrap();
+        let mut o = opts();
+        o.backend = "airllm".into();
+        o.engine = py.to_string_lossy().to_string();
+        o.server = Some(srv.to_string_lossy().to_string());
+        o.model = model.to_string_lossy().to_string();
+        o.ctx = 4096;
+        o.port = 8090;
+        assert!(validate(&o).is_ok());
+        let a = build_airllm_args(&o);
+        assert_eq!(a[0], "-u");
+        assert!(a.windows(2).any(|w| w == ["--compression", "4bit"]));
+        assert!(a.windows(2).any(|w| w == ["--max-seq-len", "4096"]));
+        assert!(!a.contains(&"--vram-gb".to_string()));
+        o.vram_gb = Some(4.0);
+        o.compression = Some("8bit".into());
+        let a = build_airllm_args(&o);
+        assert!(a.windows(2).any(|w| w == ["--vram-gb", "4"]));
+        assert!(a.windows(2).any(|w| w == ["--compression", "8bit"]));
+        let mut b = o.clone();
+        b.compression = Some("2bit".into());
+        assert!(validate(&b).is_err());
+        let mut b = o.clone();
+        b.model = d.path().to_string_lossy().to_string();
+        assert!(validate(&b).unwrap_err().contains("config.json"));
+        let mut b = o.clone();
+        b.server = None;
+        assert!(validate(&b).is_err());
+        let mut b = o;
+        b.backend = "other".into();
+        assert!(validate(&b).unwrap_err().contains("backend"));
     }
 
     #[tokio::test]

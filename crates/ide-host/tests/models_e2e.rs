@@ -17,7 +17,7 @@ async fn find_read_launch_stop() {
     }
     let small = found.iter().min_by_key(|m| m.size_bytes).unwrap();
     let srv = ModelServer::new();
-    srv.start(LaunchOpts { engine, model: small.path.clone(), alias: "e2e".into(), mmproj: None, ctx: 4096, ngl: 99, n_cpu_moe: 0, port: 18080 }).await.unwrap();
+    srv.start(LaunchOpts { backend: "llamacpp".into(), server: None, compression: None, vram_gb: None, engine, model: small.path.clone(), alias: "e2e".into(), mmproj: None, ctx: 4096, ngl: 99, n_cpu_moe: 0, port: 18080 }).await.unwrap();
     let mut ready = false;
     for _ in 0..90 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;

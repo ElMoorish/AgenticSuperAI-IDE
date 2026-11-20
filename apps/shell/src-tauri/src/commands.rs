@@ -205,3 +205,8 @@ pub async fn stop_model(state: S<'_>) -> Result<(), AppError> {
 pub async fn model_server_status(state: S<'_>) -> Result<ide_host::launcher::ServerStatus, AppError> {
     Ok(state.model_server_status().await)
 }
+
+#[tauri::command]
+pub async fn find_airllm(state: S<'_>) -> Result<Option<ide_host::models::AirllmEnv>, AppError> {
+    Ok(state.find_airllm().await)
+}
