@@ -1779,8 +1779,8 @@ mod tests {
             assert!(!l.contains("execute") && !l.contains("spawn"), "spawn permission: {id}");
             assert!(l.starts_with("core:"), "unexpected non-core permission: {id}");
         }
-        // main window only
-        assert_eq!(caps["windows"], json!(["main"]));
+        // the IDE window and the small approval popup, nothing else
+        assert_eq!(caps["windows"], json!(["main", "approvals"]));
 
         let conf_raw = include_str!("../tauri.conf.json");
         let conf: Value = serde_json::from_str(conf_raw).unwrap();
