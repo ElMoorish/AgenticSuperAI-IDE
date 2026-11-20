@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { contextBreakdown, type AgentState } from "./agentStore";
 
 export const fmtTokens = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(Math.round(n)));
@@ -41,6 +42,45 @@ export function Gauges({ state, contextSize }: { state: AgentState; contextSize:
           <i className="seg gpu" style={{ width: `${gpuFrac * 100}%` }} />
         </div>
       </div>
+      <SpeedGauge tps={state.usage.tps} />
+    </div>
+  );
+}
+
+const HISTORY = 60;
+
+/** The last minute of generation speeds, newest on the right. Pure so it can be tested. */
+export function pushSpeed(history: number[], tps: number): number[] {
+  if (!(tps > 0) || !Number.isFinite(tps)) return history;
+  return [...history, tps].slice(-HISTORY);
+}
+
+/** Polyline points for an SVG viewBox of `w` x `h`; the top of the box is `max` tok/s (at least 1). */
+export function sparkPoints(history: number[], w: number, h: number): string {
+  if (history.length === 0) return "";
+  const max = Math.max(1, ...history) * 1.15;
+  const step = history.length > 1 ? w / (history.length - 1) : 0;
+  return history.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`).join(" ");
+}
+
+/** Generation speed: the number is always shown as text; the line is a bonus. */
+export function SpeedGauge({ tps }: { tps: number }) {
+  const [hist, setHist] = useState<number[]>([]);
+  useEffect(() => {
+    setHist((h) => pushSpeed(h, tps));
+  }, [tps]);
+  const label = tps > 0 ? `${tps.toFixed(1)} tok/s` : "-";
+  const pts = sparkPoints(hist, 120, 28);
+  return (
+    <div className="gauge speed">
+      <div className="lab">
+        <span>Speed</span>
+        <b className="mono">{label}</b>
+      </div>
+      <svg className="spark" viewBox="0 0 120 28" preserveAspectRatio="none" role="img" aria-label={`Speed over the last ${hist.length} readings, now ${label}`}>
+        {pts && <polyline points={`0,28 ${pts} 120,28`} className="area" />}
+        {pts && <polyline points={pts} className="line" fill="none" />}
+      </svg>
     </div>
   );
 }

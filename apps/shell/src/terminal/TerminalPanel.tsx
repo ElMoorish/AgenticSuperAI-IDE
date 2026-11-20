@@ -1,3 +1,4 @@
+import { Check, Loader, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AgentTerminal } from "./AgentTerminal";
 import { startAgentTerminalFeed, useAgentTerminals } from "./agentTerminals";
@@ -37,23 +38,23 @@ export function TerminalPanel() {
         {users.map((n) => (
           <span key={`u${n}`} className="ptab">
             <button type="button" role="tab" aria-selected={isUser(n)} onClick={() => setSel({ kind: "user", n })}>Terminal {n}</button>
-            <button type="button" className="x" aria-label={`Close terminal ${n}`} onClick={() => closeUser(n)}>×</button>
+            <button type="button" className="x" aria-label={`Close terminal ${n}`} onClick={() => closeUser(n)}><X size={12} aria-hidden="true" /></button>
           </span>
         ))}
         {agent.map((t) => (
           <span key={`a${t.id}`} className="ptab">
             <button type="button" role="tab" aria-selected={isAgent(t.id)} onClick={() => setSel({ kind: "agent", id: t.id })}>
-              Agent #{t.id}{t.exited ? " ✓" : " …"}
+              Agent #{t.id}{t.exited ? <Check size={12} aria-label=" finished" /> : <Loader size={12} className="spin" aria-label=" running" />}
             </button>
             <button
               type="button"
               className="x"
               aria-label={`Close agent terminal ${t.id}`}
               onClick={() => { remove(t.id); if (isAgent(t.id)) setSel({ kind: "user", n: users[0] ?? -1 }); }}
-            >×</button>
+            ><X size={12} aria-hidden="true" /></button>
           </span>
         ))}
-        <button type="button" className="padd" aria-label="New terminal" title="New terminal" disabled={users.length >= MAX_USER} onClick={addUser}>+</button>
+        <button type="button" className="padd" aria-label="New terminal" title="New terminal" disabled={users.length >= MAX_USER} onClick={addUser}><Plus size={14} aria-hidden="true" /></button>
       </div>
       <div className="pbody">
         {users.map((n) => (

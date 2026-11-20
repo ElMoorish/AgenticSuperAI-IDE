@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight, File as FileGeneric, FileCode, FileJson, FileText, Folder, FolderOpen, Image as ImageIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "../editor/ConfirmDialog";
 import { models } from "../editor/models";
@@ -334,7 +335,8 @@ export function FileTree() {
                       else openEntry(e);
                     }}
                   >
-                    <span className="ft-chev" aria-hidden="true">{e.isDir ? (isOpen ? "▾" : "▸") : ""}</span>
+                    <span className="ft-chev" aria-hidden="true">{e.isDir ? (isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}</span>
+                    <FileIcon name={e.name} isDir={e.isDir} open={isOpen} />
                     <span className="ft-name">{e.name}</span>
                   </div>
                 );
@@ -360,4 +362,17 @@ export function FileTree() {
       )}
     </div>
   );
+}
+
+
+/** A small icon by file kind, so the tree reads at a glance. */
+function FileIcon({ name, isDir, open }: { name: string; isDir: boolean; open: boolean }) {
+  const p = { size: 14, className: "ft-ico", "aria-hidden": true } as const;
+  if (isDir) return open ? <FolderOpen {...p} /> : <Folder {...p} />;
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  if (["md", "txt", "rst"].includes(ext)) return <FileText {...p} />;
+  if (["json", "toml", "yaml", "yml", "lock"].includes(ext)) return <FileJson {...p} />;
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp", "ico"].includes(ext)) return <ImageIcon {...p} />;
+  if (["rs", "py", "ts", "tsx", "js", "jsx", "css", "html", "go", "c", "h", "cpp", "java", "ps1", "sh", "sql"].includes(ext)) return <FileCode {...p} />;
+  return <FileGeneric {...p} />;
 }

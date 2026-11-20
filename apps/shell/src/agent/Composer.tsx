@@ -1,3 +1,4 @@
+import { Send, Square } from "lucide-react";
 import { useRef, useState } from "react";
 import type { AgentMode } from "../ipc";
 import { IMAGE_TYPES, MAX_IMAGES, imageFiles, prepareImage, type Attachment } from "./images";
@@ -162,10 +163,10 @@ export function Composer({
           }}
         />
         {busy ? (
-          <button type="button" className="stop" onClick={onStop} aria-label="Stop the agent">Stop</button>
+          <button type="button" className="stop" onClick={onStop} aria-label="Stop the agent"><Square size={13} aria-hidden="true" />Stop</button>
         ) : (
           <button type="button" className="send primary" onClick={submit} disabled={blocked || (text.trim() === "" && images.length === 0)} aria-label="Send">
-            Send
+            <Send size={14} aria-hidden="true" />Send
           </button>
         )}
       </div>

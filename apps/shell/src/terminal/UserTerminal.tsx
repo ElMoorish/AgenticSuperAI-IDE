@@ -4,6 +4,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { closeTerminal, startUserTerminal, terminalResize, terminalWrite } from "../ipc";
 import { onUiEvent } from "../events";
+import { useStore } from "../state/store";
+import { terminalTheme } from "./terminalTheme";
 
 const enc = new TextEncoder();
 
@@ -11,17 +13,20 @@ const enc = new TextEncoder();
 export function UserTerminal({ active }: { active: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const termRef = useRef<Terminal | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const el = host.current;
     if (!el) return;
     const term = new Terminal({
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "Consolas, monospace",
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "Consolas, monospace",
+      theme: terminalTheme(),
       fontSize: 13,
       cursorBlink: true,
       scrollback: 5000,
     });
+    termRef.current = term;
     const fit = new FitAddon();
     fitRef.current = fit;
     term.loadAddon(fit);
@@ -67,6 +72,15 @@ export function UserTerminal({ active }: { active: boolean }) {
       term.dispose();
     };
   }, []);
+
+  // follow the app theme: colours are read from the live CSS variables
+  const appTheme = useStore((s) => s.theme);
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.options.theme = terminalTheme();
+      termRef.current.options.fontFamily = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "Consolas, monospace";
+    }
+  }, [appTheme]);
 
   useEffect(() => {
     if (active) { try { fitRef.current?.fit(); } catch { /* hidden */ } }

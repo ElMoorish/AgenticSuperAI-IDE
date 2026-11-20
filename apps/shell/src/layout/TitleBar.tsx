@@ -1,4 +1,6 @@
+import { CircleHelp, Minus, Plug, Search, Square, Unplug, X } from "lucide-react";
 import { windowControl } from "../ipc";
+import { Brand } from "../ui/Brand";
 import { useModelProbe, useModelStatus } from "../settings/modelStatus";
 import { useSettingsDialog } from "../settings/dialogStore";
 import { usePalette } from "../palette/paletteStore";
@@ -26,9 +28,10 @@ export function TitleBar() {
 
   return (
     <header className="title" data-tauri-drag-region>
-      <span className="brand" data-tauri-drag-region>ASA</span>
+      <Brand />
       <span className="folder" data-tauri-drag-region>{folder ?? "No folder open"}</span>
       <button type="button" className="cmd" aria-label="Search files and commands (Ctrl+K or Ctrl+P)" onClick={() => usePalette.getState().open()}>
+        <Search size={14} aria-hidden="true" />
         <span>Search files and commands</span>
         <span className="mono">Ctrl+K</span>
       </button>
@@ -39,7 +42,7 @@ export function TitleBar() {
         title={status === "down" ? "The model server is not reachable. Click to change it." : "Model and server settings"}
         onClick={openSettings}
       >
-        <span className={`dot ${status}`} aria-hidden="true" />
+        {status === "up" ? <Plug size={14} className="sico up" aria-hidden="true" /> : status === "down" ? <Unplug size={14} className="sico down" aria-hidden="true" /> : <CircleHelp size={14} className="sico" aria-hidden="true" />}
         <span>{model || "no model"}</span>
         {status === "down" && <span className="chip-note">offline</span>}
       </button>
@@ -57,9 +60,9 @@ export function TitleBar() {
         </select>
       </label>
       <div className="winbtns">
-        <button type="button" aria-label="Minimize" onClick={() => win("minimize")}>&#8211;</button>
-        <button type="button" aria-label="Maximize or restore" onClick={() => win("toggleMaximize")}>&#9633;</button>
-        <button type="button" className="close" aria-label="Close" onClick={() => win("close")}>&#10005;</button>
+        <button type="button" aria-label="Minimize" onClick={() => win("minimize")}><Minus size={14} aria-hidden="true" /></button>
+        <button type="button" aria-label="Maximize or restore" onClick={() => win("toggleMaximize")}><Square size={12} aria-hidden="true" /></button>
+        <button type="button" className="close" aria-label="Close" onClick={() => win("close")}><X size={14} aria-hidden="true" /></button>
       </div>
     </header>
   );

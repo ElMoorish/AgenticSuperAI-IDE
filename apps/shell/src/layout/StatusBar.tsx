@@ -1,3 +1,4 @@
+import { Activity, Cpu, Layers } from "lucide-react";
 import { contextBreakdown, useAgent } from "../agent/agentStore";
 import { fmtGpu } from "../agent/Gauges";
 import { useStore } from "../state/store";
@@ -17,9 +18,9 @@ export function StatusBar() {
   return (
     <footer className="status" role="contentinfo">
       <span>Model <b>{model || "none"}</b></span>
-      <span>GPU <b className="mono">{agent.gpu ? fmtGpu(agent.gpu.usedMiB, agent.gpu.totalMiB) : "not available"}</b></span>
-      <span>Speed <b className="mono">{agent.usage.tps > 0 ? `${agent.usage.tps.toFixed(1)} tok/s` : "-"}</b></span>
-      <span>Context <b className="mono">{ctx.used.toLocaleString("en-US")} / {ctx.total.toLocaleString("en-US")}</b></span>
+      <span><Cpu size={12} aria-hidden="true" /> GPU <b className="mono">{agent.gpu ? fmtGpu(agent.gpu.usedMiB, agent.gpu.totalMiB) : "not available"}</b></span>
+      <span><Activity size={12} aria-hidden="true" /> Speed <b className="mono">{agent.usage.tps > 0 ? `${agent.usage.tps.toFixed(1)} tok/s` : "-"}</b></span>
+      <span><Layers size={12} aria-hidden="true" /> Context <b className="mono">{ctx.used.toLocaleString("en-US")} / {ctx.total.toLocaleString("en-US")}</b></span>
       <span>{folder ?? "No folder"}</span>
       <span className="r">
         <button type="button" aria-label="Zoom out" onClick={zoomOut}>-</button>

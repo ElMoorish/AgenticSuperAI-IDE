@@ -1,3 +1,4 @@
+import { Check, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Approval } from "./agentStore";
 import { diffLines, previewRows } from "./diff";
@@ -77,10 +78,10 @@ export function ApprovalCard({
 
       <div className="actions">
         <button type="button" className="primary" disabled={answered} onClick={() => answer(true)}>
-          {isEdit ? "Accept edit" : "Allow"}
+          <Check size={14} aria-hidden="true" />{isEdit ? "Accept edit" : "Allow"}
         </button>
         <button type="button" disabled={answered} onClick={() => answer(false)}>
-          {isEdit ? "Reject edit" : "Deny"}
+          <X size={14} aria-hidden="true" />{isEdit ? "Reject edit" : "Deny"}
         </button>
         {isEdit && onReview && (
           <button type="button" onClick={() => onReview(approval)}>Review side by side</button>

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { Files, Play, Search, Settings } from "lucide-react";
 import { AgentPanel } from "../agent/AgentPanel";
 import { useOverlayRelay } from "../overlay/useOverlayRelay";
 import { EditorArea } from "../editor/EditorArea";
@@ -58,10 +59,10 @@ export function Shell() {
       <TitleBar />
 
       <nav className="rail" aria-label="Activity bar">
-        <button type="button" aria-label="Explorer" aria-pressed={!collapsed.filePanel} title="Explorer (Ctrl+B)" onClick={() => toggle("filePanel")}>&#9636;</button>
-        <button type="button" aria-label="Search" title="Search (coming later)" disabled>&#8981;</button>
-        <button type="button" aria-label="Settings" title="Settings" onClick={() => useSettingsDialog.getState().open()}>&#9881;</button>
-        <button type="button" aria-label="Run" title="Run (coming later)" disabled>&#9662;</button>
+        <button type="button" aria-label="Explorer" aria-pressed={!collapsed.filePanel} title="Explorer (Ctrl+B)" onClick={() => toggle("filePanel")}><Files size={18} aria-hidden="true" /></button>
+        <button type="button" aria-label="Search" title="Search (coming later)" disabled><Search size={18} aria-hidden="true" /></button>
+        <button type="button" aria-label="Settings" title="Settings" onClick={() => useSettingsDialog.getState().open()}><Settings size={18} aria-hidden="true" /></button>
+        <button type="button" aria-label="Run" title="Run (coming later)" disabled><Play size={18} aria-hidden="true" /></button>
       </nav>
 
       <aside className={`side${collapsed.filePanel ? " panel-collapsed" : ""}`} aria-label="Files">

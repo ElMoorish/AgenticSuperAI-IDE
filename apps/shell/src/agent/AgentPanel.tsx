@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { onUiEvent } from "../events";
 import { useStore } from "../state/store";
 import { ApprovalCard } from "./ApprovalCard";
+import { AgentCore } from "../ui/AgentCore";
 import { Composer } from "./Composer";
 import { Gauges } from "./Gauges";
 import { DiffReview } from "./InlineDiff";
@@ -66,6 +67,7 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
     <aside className={`agent${collapsed ? " panel-collapsed" : ""}`} aria-label="Agent">
       <div className="ahead">
         <div className="t">
+          <AgentCore busy={state.turn === "running"} />
           <span>Agent</span>
           <span className={`turn ${state.turn}`} role="status" aria-live="polite">
             {state.turn === "running" ? "Working…" : state.turn === "waiting" ? "Waiting for you" : ""}
