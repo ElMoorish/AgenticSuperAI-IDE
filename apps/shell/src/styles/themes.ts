@@ -1,100 +1,121 @@
 /**
- * Six themes. Values are taken from the approved workbench mockup
- * (mockup --dim is exposed as `muted`, --acc as `accent`, --acc-ink as `accent-ink`).
- * Tokens the mockup leaves undefined for a theme (warn/err for graphite, aurora, phosphor and
- * ember; the mockup CSS inherits them from harbor) are inherited from harbor here too.
- * `focus-ring` is new (not in the mockup): each theme uses its accent.
+ * Six themes. Voltage is the primary look and the default; the other five are options in Settings.
+ * Values come from the approved design mockup (docs/design/mockups/themes.html). Every theme defines
+ * every token (checked by tests, including WCAG AA contrast for text, muted text, accent and focus ring).
+ *
+ * Besides colour, a theme carries a little personality: corner radius and its own UI and code fonts
+ * (bundled with the app, nothing is fetched at run time).
  */
-export const THEME_NAMES = ["harbor", "paper", "graphite", "aurora", "phosphor", "ember"] as const;
+export const THEME_NAMES = ["voltage", "forge", "aurora", "drafting", "deepsea", "monolith"] as const;
 export type ThemeName = (typeof THEME_NAMES)[number];
+export const DEFAULT_THEME: ThemeName = "voltage";
 
 export const TOKEN_NAMES = [
   "bg", "chrome", "panel", "raise", "line", "text", "muted",
-  "accent", "accent-ink", "ok", "warn", "err", "add", "del",
+  "accent", "accent-ink", "accent-2", "ok", "warn", "err", "add", "del",
   "kw", "st", "fn", "nu", "cm", "on-err", "focus-ring",
 ] as const;
 export type TokenName = (typeof TOKEN_NAMES)[number];
 export type ThemeTokens = Record<TokenName, string>;
 
+export interface ThemeStyle {
+  /** Corner radius for controls and cards. */
+  radius: string;
+  fontUi: string;
+  fontMono: string;
+  /** Light themes switch the browser's colour scheme (scrollbars, form controls). */
+  light: boolean;
+  /** One-line character, shown in Settings. */
+  blurb: string;
+}
+
 export const THEME_LABELS: Record<ThemeName, string> = {
-  harbor: "Harbor",
-  paper: "Paper (light)",
-  graphite: "Graphite",
+  voltage: "Voltage",
+  forge: "Forge",
   aurora: "Aurora",
-  phosphor: "Phosphor",
-  ember: "Ember",
+  drafting: "Drafting table (light)",
+  deepsea: "Deep sea",
+  monolith: "Monolith",
 };
 
 export function isThemeName(v: unknown): v is ThemeName {
   return typeof v === "string" && (THEME_NAMES as readonly string[]).includes(v);
 }
 
-const harbor: ThemeTokens = {
-  bg: "#0e1621", chrome: "#0a111a", panel: "#111c29", raise: "#16243a", line: "#223148",
-  text: "#dbe6f5", muted: "#7d8fa8", accent: "#5eb6ff", "accent-ink": "#04202f",
-  ok: "#58d6a0", warn: "#f2b84b", err: "#ff6b6b", add: "#0f3a2b", del: "#43202a",
-  kw: "#c3a6ff", st: "#8fe3a8", fn: "#7cc7ff", nu: "#ffb27a", cm: "#5d7089",
-  "on-err": "#1a0505", "focus-ring": "#5eb6ff",
+const sans = (name: string) => `"${name}", "Segoe UI", system-ui, sans-serif`;
+const mono = (name: string) => `"${name}", Consolas, monospace`;
+
+export const themeStyles: Record<ThemeName, ThemeStyle> = {
+  voltage: { radius: "6px", fontUi: sans("Archivo Variable"), fontMono: mono("JetBrains Mono Variable"), light: false, blurb: "Electric magenta and cyan on deep indigo. Energetic, sharp, heavy type." },
+  forge: { radius: "3px", fontUi: sans("Bricolage Grotesque Variable"), fontMono: mono("IBM Plex Mono"), light: false, blurb: "Hot metal. Every token is a spark struck from steel. Warm and robust." },
+  aurora: { radius: "12px", fontUi: sans("Outfit Variable"), fontMono: mono("Fira Code Variable"), light: false, blurb: "Northern-lights calm. Soft, rounded, quietly energetic." },
+  drafting: { radius: "2px", fontUi: sans("Hanken Grotesk Variable"), fontMono: mono("DM Mono"), light: true, blurb: "Light, ink and one signal orange. Precise like a technical drawing." },
+  deepsea: { radius: "10px", fontUi: sans("Schibsted Grotesk Variable"), fontMono: mono("Martian Mono Variable"), light: false, blurb: "Bioluminescence in the dark. Mysterious and calm." },
+  monolith: { radius: "0px", fontUi: sans("Familjen Grotesk Variable"), fontMono: mono("Red Hat Mono Variable"), light: false, blurb: "Black, white and one red. Swiss precision, no decoration." },
 };
 
 export const themes: Record<ThemeName, ThemeTokens> = {
-  harbor,
-  graphite: {
-    ...harbor,
-    bg: "#1b1b1d", chrome: "#141416", panel: "#212124", raise: "#2a2a2e", line: "#35353a",
-    text: "#e6e6ea", muted: "#92929a", accent: "#ff8a3d", "accent-ink": "#2a1200",
-    ok: "#7ed492", add: "#1d3a25", del: "#41232a",
-    kw: "#ff8a3d", st: "#9ece6a", fn: "#7aa2f7", nu: "#e0af68", cm: "#66666e",
-    "focus-ring": "#ff8a3d",
+  voltage: {
+    bg: "#0b0d26", chrome: "#070819", panel: "#10133a", raise: "#191d52", line: "#2a2f78",
+    text: "#eceeff", muted: "#9aa0e0", accent: "#ff3d9a", "accent-ink": "#14000a", "accent-2": "#2de2ff",
+    ok: "#b6ff4d", warn: "#ffd23d", err: "#ff6b6b", add: "#0f3d4a", del: "#4a1636",
+    kw: "#ff7ac0", st: "#7dffd0", fn: "#2de2ff", nu: "#ffd23d", cm: "#6b72c4",
+    "on-err": "#1a0505", "focus-ring": "#2de2ff",
+  },
+  forge: {
+    bg: "#15110f", chrome: "#0d0a09", panel: "#1d1714", raise: "#2a211c", line: "#3a2d25",
+    text: "#f4e9df", muted: "#b09a89", accent: "#ff6a1a", "accent-ink": "#1a0b02", "accent-2": "#ffb23d",
+    ok: "#9bd35a", warn: "#ffb23d", err: "#ff7a66", add: "#2c3a1a", del: "#4a1f12",
+    kw: "#ff9a5a", st: "#e9d27a", fn: "#ffb23d", nu: "#ffd76a", cm: "#86705f",
+    "on-err": "#1a0805", "focus-ring": "#ffb23d",
   },
   aurora: {
-    ...harbor,
-    bg: "#120f20", chrome: "#0d0b18", panel: "#181430", raise: "#211c40", line: "#2f2956",
-    text: "#ebe7ff", muted: "#8f88bd", accent: "#a78bff", "accent-ink": "#140b33",
-    ok: "#3ddc97", add: "#123a2e", del: "#41203a",
-    kw: "#c8b0ff", st: "#3ddc97", fn: "#7cc4ff", nu: "#ffb86b", cm: "#625b8f",
-    "focus-ring": "#a78bff",
+    bg: "#08140f", chrome: "#050d0a", panel: "#0d1c16", raise: "#14291f", line: "#1f3b2e",
+    text: "#e3f6ec", muted: "#8bb5a2", accent: "#3dffb0", "accent-ink": "#04180f", "accent-2": "#9b7bff",
+    ok: "#c8ff7a", warn: "#ffe27a", err: "#ff8aa0", add: "#0f3a2a", del: "#3d1f3a",
+    kw: "#b69bff", st: "#9dffd0", fn: "#3dffb0", nu: "#ffe27a", cm: "#56806e",
+    "on-err": "#1a0508", "focus-ring": "#3dffb0",
   },
-  paper: {
-    ...harbor,
-    bg: "#fdfbf7", chrome: "#f1ece3", panel: "#f7f3ec", raise: "#ffffff", line: "#ddd5c7",
-    text: "#2b2926", muted: "#6f695f", accent: "#b4380d", "accent-ink": "#ffffff",
-    ok: "#15803d", warn: "#b45309", err: "#c62828", add: "#d9f3e1", del: "#fbdcdc",
-    kw: "#7c3aed", st: "#15803d", fn: "#1d4ed8", nu: "#b45309", cm: "#a39c8f",
-    "on-err": "#ffffff", "focus-ring": "#b4380d",
+  drafting: {
+    bg: "#f2f4f7", chrome: "#e3e8ef", panel: "#fafbfc", raise: "#ffffff", line: "#c8d1dd",
+    text: "#13203a", muted: "#4f5f7a", accent: "#cf3f0c", "accent-ink": "#ffffff", "accent-2": "#1f4fd8",
+    ok: "#14803f", warn: "#8a5200", err: "#c62828", add: "#d9f2e1", del: "#fadcd6",
+    kw: "#1f4fd8", st: "#14803f", fn: "#7a2fe0", nu: "#8a5200", cm: "#8593ab",
+    "on-err": "#ffffff", "focus-ring": "#1f4fd8",
   },
-  phosphor: {
-    ...harbor,
-    bg: "#050b06", chrome: "#030704", panel: "#09130a", raise: "#0e1d10", line: "#173a1c",
-    text: "#bff5c4", muted: "#53905a", accent: "#3dff74", "accent-ink": "#021407",
-    ok: "#3dff74", add: "#0c3a18", del: "#3b1212",
-    kw: "#3dff74", st: "#eaff6b", fn: "#6bffdb", nu: "#ffb86b", cm: "#3b6b41",
-    "focus-ring": "#3dff74",
+  deepsea: {
+    bg: "#061a22", chrome: "#04121a", panel: "#09232d", raise: "#0f3340", line: "#17465a",
+    text: "#d9f2f7", muted: "#80b2c0", accent: "#34f0d0", "accent-ink": "#03211d", "accent-2": "#4aa8ff",
+    ok: "#8ff5cf", warn: "#ffe27a", err: "#ff8a8a", add: "#0c3d3a", del: "#3d2230",
+    kw: "#6bc1ff", st: "#8ff5cf", fn: "#34f0d0", nu: "#ffe27a", cm: "#4a8196",
+    "on-err": "#1a0505", "focus-ring": "#34f0d0",
   },
-  ember: {
-    ...harbor,
-    bg: "#1a1211", chrome: "#130d0c", panel: "#221716", raise: "#2c1d1b", line: "#3d2724",
-    text: "#f4e6e1", muted: "#a38a84", accent: "#ff6a55", "accent-ink": "#2a0804",
-    ok: "#7ed492", add: "#183a22", del: "#44191b",
-    kw: "#ff8a7a", st: "#ffb454", fn: "#6fc3ff", nu: "#f0a1ff", cm: "#6e5650",
-    "focus-ring": "#ff6a55",
+  monolith: {
+    bg: "#0c0c0c", chrome: "#050505", panel: "#121212", raise: "#1b1b1b", line: "#2c2c2c",
+    text: "#f5f5f5", muted: "#a3a3a3", accent: "#ff2d2d", "accent-ink": "#140000", "accent-2": "#ffffff",
+    ok: "#7ed492", warn: "#ffd23d", err: "#ff7070", add: "#1a2a1a", del: "#321414",
+    kw: "#ffffff", st: "#bdbdbd", fn: "#ff6b6b", nu: "#e0e0e0", cm: "#707070",
+    "on-err": "#140000", "focus-ring": "#ffffff",
   },
 };
 
-/** Set every token as a CSS custom property (`--bg`, `--focus-ring`, ...) on <html>. */
+/** Set every token (`--bg`, `--accent-2`, ...) plus radius and fonts on <html>. */
 export function applyTheme(name: ThemeName, root: HTMLElement = document.documentElement): void {
   const t = themes[name];
+  const s = themeStyles[name];
   for (const tok of TOKEN_NAMES) root.style.setProperty(`--${tok}`, t[tok]);
+  root.style.setProperty("--radius", s.radius);
+  root.style.setProperty("--font-ui", s.fontUi);
+  root.style.setProperty("--font-mono", s.fontMono);
   root.dataset.theme = name;
-  root.style.colorScheme = name === "paper" ? "light" : "dark";
+  root.style.colorScheme = s.light ? "light" : "dark";
 }
 
 /**
- * Initial theme: a theme the user chose wins; otherwise follow the OS (`light` -> paper).
- * `settingsTheme` defaults to "harbor" on the host, so harbor only counts as a choice when
- * `chosen` (the user explicitly picked a theme once) is true.
+ * Initial theme: the saved choice if it is one of today's themes, otherwise Voltage.
+ * Older saved names (harbor, paper, graphite, phosphor, ember) are not themes any more and fall back to Voltage.
+ * The operating system's light or dark setting is deliberately ignored: Voltage is the primary look.
  */
-export function resolveInitialTheme(settingsTheme: unknown, chosen: boolean, prefersLight: boolean): ThemeName {
-  if (isThemeName(settingsTheme) && (settingsTheme !== "harbor" || chosen)) return settingsTheme;
-  return prefersLight ? "paper" : "harbor";
+export function resolveInitialTheme(saved: unknown): ThemeName {
+  return isThemeName(saved) ? saved : DEFAULT_THEME;
 }

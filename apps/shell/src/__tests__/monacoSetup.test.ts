@@ -12,7 +12,7 @@ describe("monacoSetup", () => {
     expect(MONACO_THEME_NAMES).toEqual(THEME_NAMES.map((t) => `asa-${t}`));
     for (const t of THEME_NAMES) {
       const d = buildMonacoTheme(t);
-      expect(d.base).toBe(t === "paper" ? "vs" : "vs-dark");
+      expect(d.base).toBe(t === "drafting" ? "vs" : "vs-dark");
       expect(d.colors["editor.background"]).toBe(themes[t].bg);
       expect(d.colors["editor.foreground"]).toBe(themes[t].text);
       expect(d.colors["editorCursor.foreground"]).toBe(themes[t].accent);

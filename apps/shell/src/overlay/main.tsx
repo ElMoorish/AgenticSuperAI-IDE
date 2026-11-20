@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { bootstrapTheme } from "../bootstrap";
 import OverlayApp from "./OverlayApp";
+import "../styles/fonts";
 import "../styles/tokens.css";
 import "../styles/agent.css";
 

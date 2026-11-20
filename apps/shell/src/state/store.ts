@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { getSettings, isTauri, setSettings, type Settings, type WorkspaceInfo } from "../ipc";
-import { applyTheme, isThemeName, resolveInitialTheme, type ThemeName } from "../styles/themes";
+import { DEFAULT_THEME, applyTheme, resolveInitialTheme, type ThemeName } from "../styles/themes";
 
 export type PanelKey = "filePanel" | "agent" | "bottom";
 
@@ -92,7 +92,7 @@ const persisted = loadPersisted();
 export const useStore = create<StoreState>((set, get) => ({
   workspace: { info: null },
   settings: { value: null, loaded: false, error: null },
-  theme: "harbor",
+  theme: DEFAULT_THEME,
   zoom: persisted.zoom,
   layout: persisted.layout,
 
@@ -156,24 +156,17 @@ export const useStore = create<StoreState>((set, get) => ({
       const code = (e as { code?: string }).code;
       error = code === "no_tauri" ? null : e instanceof Error ? e.message : String(e);
     }
-    let chosen = false;
     let local: string | null = null;
     try {
       local = localStorage.getItem(CHOSEN_KEY);
-      chosen = local !== null;
     } catch {
       /* ignore */
     }
-    const prefersLight =
-      typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches;
-    const wanted = value ? value.theme : local;
-    const theme = resolveInitialTheme(isThemeName(wanted) ? wanted : null, chosen, prefersLight);
-    if (value && isThemeName(value.theme) && value.theme !== "harbor") {
-      try {
-        localStorage.setItem(CHOSEN_KEY, value.theme); // lets bootstrapTheme avoid a flash next launch
-      } catch {
-        /* ignore */
-      }
+    const theme = resolveInitialTheme(value ? value.theme : local);
+    try {
+      localStorage.setItem(CHOSEN_KEY, theme); // lets bootstrapTheme avoid a flash next launch
+    } catch {
+      /* ignore */
     }
     applyTheme(theme);
     set({ settings: { value, loaded: true, error }, theme });

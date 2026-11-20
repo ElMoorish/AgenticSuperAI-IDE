@@ -49,10 +49,11 @@ describe("shell", () => {
     expect(useStore.getState().zoom).toBe(1);
   });
 
-  it("initial theme: saved choice wins, otherwise light OS -> paper", () => {
-    expect(resolveInitialTheme("ember", false, true)).toBe("ember");
-    expect(resolveInitialTheme("harbor", false, true)).toBe("paper");
-    expect(resolveInitialTheme("harbor", true, true)).toBe("harbor");
-    expect(resolveInitialTheme(null, false, false)).toBe("harbor");
+  it("initial theme: a saved current theme wins; anything else (old names, nothing) is Voltage", () => {
+    expect(resolveInitialTheme("forge")).toBe("forge");
+    expect(resolveInitialTheme("drafting")).toBe("drafting");
+    for (const old of ["harbor", "paper", "ember", "graphite", "phosphor", "", null, undefined, 3]) {
+      expect(resolveInitialTheme(old)).toBe("voltage");
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { CHOSEN_KEY, STORAGE_KEY, clampZoom, useStore } from "./state/store";
-import { applyTheme, isThemeName, resolveInitialTheme, type ThemeName } from "./styles/themes";
+import { applyTheme, resolveInitialTheme, type ThemeName } from "./styles/themes";
 
 /**
  * Runs synchronously before React renders: applies the last known theme and zoom from
@@ -19,8 +19,7 @@ export function bootstrapTheme(root: HTMLElement = document.documentElement): Th
   } catch {
     /* corrupt: default zoom */
   }
-  const prefersLight = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches;
-  const theme = resolveInitialTheme(isThemeName(chosen) ? chosen : null, isThemeName(chosen), prefersLight);
+  const theme = resolveInitialTheme(chosen);
   applyTheme(theme, root);
   root.style.setProperty("--zoom", String(zoom));
   useStore.setState({ theme });

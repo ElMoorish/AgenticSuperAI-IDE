@@ -8,7 +8,7 @@ import { useModelStatus, validateEndpoint } from "./modelStatus";
 const FONT_MIN = 8;
 const FONT_MAX = 32;
 
-const DEFAULTS: Settings = { endpoint: "", model: "", api_key: "", ignore: [], theme: "harbor", font_size: 13, recent: [] };
+const DEFAULTS: Settings = { endpoint: "", model: "", api_key: "", ignore: [], theme: "voltage", font_size: 13, recent: [] };
 
 /** Modal settings: model server, model, theme, editor font, ignore globs and context size. */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {

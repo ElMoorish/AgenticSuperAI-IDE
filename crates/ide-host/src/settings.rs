@@ -28,7 +28,7 @@ impl Default for Settings {
             model: String::new(),
             api_key: String::new(),
             ignore: Vec::new(),
-            theme: "harbor".into(),
+            theme: "voltage".into(),
             font_size: 13,
             recent: Vec::new(),
         }

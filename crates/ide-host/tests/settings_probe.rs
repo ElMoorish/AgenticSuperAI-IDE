@@ -12,7 +12,7 @@ fn settings_defaults_on_corrupt_file_and_keeps_bad_copy() {
     let s = Settings::load(d.path());
     assert_eq!(s, Settings::default());
     assert_eq!(s.endpoint, "http://127.0.0.1:11434");
-    assert_eq!(s.theme, "harbor");
+    assert_eq!(s.theme, "voltage");
     assert_eq!(s.font_size, 13);
     assert_eq!(std::fs::read_to_string(d.path().join("settings.json.bad")).unwrap(), "{ not json");
     assert!(!d.path().join("settings.json").exists());
@@ -28,7 +28,7 @@ fn settings_partial_file_loads_with_defaults() {
     std::fs::write(d.path().join("settings.json"), r#"{"model":"qwen"}"#).unwrap();
     let s = Settings::load(d.path());
     assert_eq!(s.model, "qwen");
-    assert_eq!(s.theme, "harbor");
+    assert_eq!(s.theme, "voltage");
 }
 
 #[test]

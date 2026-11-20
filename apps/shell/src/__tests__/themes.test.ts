@@ -4,7 +4,7 @@ import { contrastRatio } from "../styles/contrast";
 
 describe("themes", () => {
   it("themes_define_every_token_for_every_theme", () => {
-    expect([...THEME_NAMES].sort()).toEqual(["aurora", "ember", "graphite", "harbor", "paper", "phosphor"]);
+    expect([...THEME_NAMES].sort()).toEqual(["aurora", "deepsea", "drafting", "forge", "monolith", "voltage"]);
     for (const name of THEME_NAMES) {
       for (const tok of TOKEN_NAMES) {
         const v = themes[name][tok];

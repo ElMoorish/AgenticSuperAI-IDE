@@ -33,7 +33,7 @@ export function installMockHost(): void {
   let nextCb = 1;
   const sinks: { id: number; n: number }[] = [];
   const emit = (ev: Msg) => sinks.forEach((s) => callbacks.get(s.id)?.({ message: ev, index: s.n++ }));
-  const settings = { endpoint: "http://localhost:8080/v1", model: "", ignore: [], theme: "harbor", font_size: 13, recent: ["C:/demo"] };
+  const settings = { endpoint: "http://localhost:8080/v1", model: "", ignore: [], theme: "voltage", font_size: 13, recent: ["C:/demo"] };
 
   const list = (rel: string) => {
     const prefix = rel ? rel + "/" : "";

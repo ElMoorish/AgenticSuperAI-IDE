@@ -10,7 +10,7 @@ vi.mock("@tauri-apps/api/core", async (orig) => {
 import App, { shortcutAction, shouldHandleShortcut } from "../App";
 import { bootstrapTheme } from "../bootstrap";
 import { pickSettings, setSettings, type Settings } from "../ipc";
-import { STORAGE_KEY, useStore } from "../state/store";
+import { CHOSEN_KEY, STORAGE_KEY, useStore } from "../state/store";
 import { themes } from "../styles/themes";
 
 // jsdom lacks PointerEvent coordinates: polyfill on top of MouseEvent
@@ -126,7 +126,7 @@ describe("splitter drag", () => {
 });
 
 const host: Settings = {
-  endpoint: "http://127.0.0.1:11434", model: "m", api_key: "", ignore: ["x"], theme: "harbor", font_size: 13, recent: ["a"],
+  endpoint: "http://127.0.0.1:11434", model: "m", api_key: "", ignore: ["x"], theme: "voltage", font_size: 13, recent: ["a"],
 };
 
 describe("settings ipc", () => {
@@ -152,41 +152,44 @@ describe("settings ipc", () => {
     invokeMock.mockImplementation(async (cmd: string, args?: { settings: Settings }) =>
       cmd === "get_settings" ? fresh : args!.settings,
     );
-    await useStore.getState().setTheme("ember");
+    await useStore.getState().setTheme("forge");
     const cmds = invokeMock.mock.calls.map((c) => c[0]);
     expect(cmds).toEqual(["get_settings", "set_settings"]);
     const sent = (invokeMock.mock.calls[1][1] as { settings: Settings }).settings;
-    expect(sent).toMatchObject({ model: "fresh", font_size: 16, theme: "ember" });
+    expect(sent).toMatchObject({ model: "fresh", font_size: 16, theme: "forge" });
   });
 });
 
 describe("bootstrapTheme", () => {
   it("applies saved theme and zoom synchronously", () => {
-    localStorage.setItem("asa.theme.chosen", "ember");
+    localStorage.setItem("asa.theme.chosen", "forge");
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ zoom: 1.3 }));
     const root = document.createElement("html");
-    expect(bootstrapTheme(root)).toBe("ember");
-    expect(root.style.getPropertyValue("--bg")).toBe(themes.ember.bg);
+    expect(bootstrapTheme(root)).toBe("forge");
+    expect(root.style.getPropertyValue("--bg")).toBe(themes.forge.bg);
     expect(root.style.getPropertyValue("--zoom")).toBe("1.3");
     expect(root.style.colorScheme).toBe("dark");
   });
 
-  it("falls back to harbor, clamps zoom and survives corrupt storage", () => {
+  it("falls back to Voltage, clamps zoom and survives corrupt storage", () => {
     localStorage.setItem(STORAGE_KEY, "{not json");
     const root = document.createElement("html");
-    expect(bootstrapTheme(root)).toBe("harbor");
+    expect(bootstrapTheme(root)).toBe("voltage");
     expect(root.style.getPropertyValue("--zoom")).toBe("1");
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ zoom: 99 }));
     bootstrapTheme(root);
     expect(root.style.getPropertyValue("--zoom")).toBe("1.6");
   });
 
-  it("uses paper (light color-scheme) when the OS prefers light and nothing is saved", () => {
+  it("keeps Voltage even when the OS prefers light; the light theme is an explicit choice", () => {
     const orig = window.matchMedia;
     window.matchMedia = ((q: string) => ({ matches: q.includes("light") })) as unknown as typeof matchMedia;
     const root = document.createElement("html");
-    expect(bootstrapTheme(root)).toBe("paper");
-    expect(root.style.colorScheme).toBe("light");
+    expect(bootstrapTheme(root)).toBe("voltage");
+    expect(root.style.colorScheme).toBe("dark");
     window.matchMedia = orig;
+    localStorage.setItem(CHOSEN_KEY, "drafting");
+    expect(bootstrapTheme(root)).toBe("drafting");
+    expect(root.style.colorScheme).toBe("light");
   });
 });

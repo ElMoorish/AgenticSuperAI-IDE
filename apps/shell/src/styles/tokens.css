@@ -1,15 +1,16 @@
-/* Fallback tokens (harbor) so first paint is correct before applyTheme runs.
+/* Fallback tokens (Voltage, the default) so first paint is correct before applyTheme runs.
    applyTheme() overwrites these on <html> at runtime. */
 :root {
-  --bg:#0e1621; --chrome:#0a111a; --panel:#111c29; --raise:#16243a; --line:#223148;
-  --text:#dbe6f5; --muted:#7d8fa8; --accent:#5eb6ff; --accent-ink:#04202f;
-  --ok:#58d6a0; --warn:#f2b84b; --err:#ff6b6b; --add:#0f3a2b; --del:#43202a;
-  --kw:#c3a6ff; --st:#8fe3a8; --fn:#7cc7ff; --nu:#ffb27a; --cm:#5d7089;
-  --on-err:#1a0505; --focus-ring:#5eb6ff;
+  --bg:#0b0d26; --chrome:#070819; --panel:#10133a; --raise:#191d52; --line:#2a2f78;
+  --text:#eceeff; --muted:#9aa0e0; --accent:#ff3d9a; --accent-ink:#14000a; --accent-2:#2de2ff;
+  --ok:#b6ff4d; --warn:#ffd23d; --err:#ff6b6b; --add:#0f3d4a; --del:#4a1636;
+  --kw:#ff7ac0; --st:#7dffd0; --fn:#2de2ff; --nu:#ffd23d; --cm:#6b72c4;
+  --on-err:#1a0505; --focus-ring:#2de2ff;
+  --radius: 6px;
   --zoom: 1;
   --file-w: 186px; --agent-w: 318px; --bottom-h: 206px;
-  --font-ui: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "Spline Sans Mono", Consolas, monospace;
+  --font-ui: "Archivo Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", Consolas, monospace;
 }
 
 /* Zoom: every size below is in rem, so scaling the root font scales the whole UI. */
@@ -42,17 +43,17 @@ button:disabled { cursor: default; opacity: 0.55; }
 .title .folder { color: var(--muted); }
 .title .cmd {
   flex: 1; max-width: 26rem; margin: 0 auto; background: var(--raise); border: 1px solid var(--line);
-  border-radius: 6px; padding: 0.1875rem 0.625rem; color: var(--muted); font-size: 0.75rem;
+  border-radius: var(--radius); padding: 0.1875rem 0.625rem; color: var(--muted); font-size: 0.75rem;
   display: flex; justify-content: space-between;
 }
 .chip {
   display: inline-flex; align-items: center; gap: 0.4375rem; background: var(--raise);
-  border: 1px solid var(--line); border-radius: 6px; padding: 0.1875rem 0.5625rem; font-size: 0.75rem;
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 0.1875rem 0.5625rem; font-size: 0.75rem;
 }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; }
 .themepick { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; color: var(--muted); }
 .themepick select {
-  background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 0.125rem 0.375rem;
 }
 .winbtns { display: flex; align-self: stretch; }
@@ -69,7 +70,7 @@ button:disabled { cursor: default; opacity: 0.55; }
   flex-direction: column; align-items: center; gap: 6px; padding-top: 8px;
 }
 .rail button {
-  width: 1.75rem; height: 1.75rem; border-radius: 7px; border: 0; background: transparent;
+  width: 1.75rem; height: 1.75rem; border-radius: var(--radius); border: 0; background: transparent;
   color: var(--muted); display: grid; place-items: center; font-size: 0.875rem;
 }
 .rail button:hover:not(:disabled) { color: var(--text); background: var(--raise); }
@@ -94,13 +95,13 @@ button:disabled { cursor: default; opacity: 0.55; }
 .tab:focus-visible { outline-offset: -2px; }
 .tflag { font-size: 0.66rem; color: var(--warn); }
 .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--accent); flex: none; }
-.tclose { width: 1.25rem; height: 1.25rem; border: 0; border-radius: 4px; background: transparent; color: var(--muted); line-height: 1; padding: 0; display: grid; place-items: center; }
+.tclose { width: 1.25rem; height: 1.25rem; border: 0; border-radius: var(--radius); background: transparent; color: var(--muted); line-height: 1; padding: 0; display: grid; place-items: center; }
 .tclose:hover { background: var(--raise); color: var(--text); }
 .edwrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .monaco-host { flex: 1; min-height: 0; min-width: 0; }
 .empty { flex: 1; display: grid; place-content: center; justify-items: center; text-align: center; color: var(--muted); gap: 0.25rem; padding: 1rem; }
 .empty b { color: var(--text); font-weight: 500; }
-.empty button, .banner button, .modal button, .ft-empty button, .ft-err button { border: 1px solid var(--line); background: var(--raise); color: var(--text); border-radius: 6px; padding: 0.25rem 0.625rem; font-size: 0.78rem; }
+.empty button, .banner button, .modal button, .ft-empty button, .ft-err button { border: 1px solid var(--line); background: var(--raise); color: var(--text); border-radius: var(--radius); padding: 0.25rem 0.625rem; font-size: 0.78rem; }
 .empty button:hover, .banner button:hover, .modal button:hover, .ft-empty button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent) !important; color: var(--accent-ink) !important; border-color: var(--accent) !important; font-weight: 600; }
 .banner { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; padding: 0.375rem 0.75rem; font-size: 0.78rem; border-bottom: 1px solid var(--line); flex: none; }
@@ -110,7 +111,7 @@ button.primary { background: var(--accent) !important; color: var(--accent-ink) 
 
 /* ---- modal ---- */
 .modal-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: grid; place-items: center; z-index: 50; }
-.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.125rem; min-width: 20rem; max-width: 28rem; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: calc(var(--radius) + 2px); padding: 1rem 1.125rem; min-width: 20rem; max-width: 28rem; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); }
 .modal h3 { margin: 0 0 0.375rem; font-size: 0.9rem; }
 .modal p { margin: 0 0 0.875rem; color: var(--muted); }
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
@@ -119,7 +120,7 @@ button.primary { background: var(--accent) !important; color: var(--accent-ink) 
 .filetree { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .ft-head { display: flex; align-items: center; justify-content: space-between; padding: 0.625rem 0.5rem 0.25rem 0.75rem; flex: none; }
 .ft-head h2 { margin: 0; font: 600 0.6875rem var(--font-ui); color: var(--muted); letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ft-btn { background: transparent; border: 0; color: var(--muted); border-radius: 5px; width: 1.5rem; height: 1.5rem; padding: 0; }
+.ft-btn { background: transparent; border: 0; color: var(--muted); border-radius: var(--radius); width: 1.5rem; height: 1.5rem; padding: 0; }
 .ft-btn:hover { background: var(--raise); color: var(--text); }
 .ft-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .ft-tree { position: relative; }
@@ -140,7 +141,7 @@ button.primary { background: var(--accent) !important; color: var(--accent-ink) 
 
 .bottom { border-top: 1px solid var(--line); background: var(--chrome); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .ptabs { display: flex; gap: 2px; padding: 0 0.5rem; height: 1.875rem; align-items: center; border-bottom: 1px solid var(--line); font-size: 0.75rem; flex: none; }
-.ptabs b { font-weight: 500; padding: 0.25rem 0.5rem; border-radius: 5px; background: var(--raise); }
+.ptabs b { font-weight: 500; padding: 0.25rem 0.5rem; border-radius: var(--radius); background: var(--raise); }
 .pbody { padding: 0.5rem 0.75rem; color: var(--muted); font-size: 0.75rem; overflow: hidden; }
 
 .agent { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
@@ -149,10 +150,10 @@ button.primary { background: var(--accent) !important; color: var(--accent-ink) 
 .ahead .gauge { margin-bottom: 0.4375rem; }
 .gauge .lab { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); margin-bottom: 3px; }
 .gauge .lab b { color: var(--text); font-weight: 500; }
-.gauge .bar { height: 8px; border-radius: 4px; background: var(--raise); }
+.gauge .bar { height: 8px; border-radius: var(--radius); background: var(--raise); }
 .ledger { padding: 0.625rem 0.75rem; flex: 1; color: var(--muted); min-height: 0; overflow: hidden; }
 .composer { border-top: 1px solid var(--line); padding: 0.5rem 0.625rem; }
-.composer .box { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 0.4375rem 0.625rem; color: var(--muted); font-size: 0.78rem; }
+.composer .box { border: 1px solid var(--line); border-radius: calc(var(--radius) + 2px); background: var(--bg); padding: 0.4375rem 0.625rem; color: var(--muted); font-size: 0.78rem; }
 
 .status {
   grid-column: 1 / -1; background: var(--chrome); border-top: 1px solid var(--line); display: flex;
@@ -162,7 +163,7 @@ button.primary { background: var(--accent) !important; color: var(--accent-ink) 
 .status .r { margin-left: auto; display: inline-flex; gap: 0.25rem; align-items: center; }
 /* inset ring so the 1.5rem bar never clips it */
 .status button:focus-visible { outline-offset: -2px; }
-.status button { background: transparent; border: 0; color: var(--muted); padding: 0 0.25rem; border-radius: 3px; }
+.status button { background: transparent; border: 0; color: var(--muted); padding: 0 0.25rem; border-radius: var(--radius); }
 .status button:hover { color: var(--text); }
 
 /* ---- splitters ---- */

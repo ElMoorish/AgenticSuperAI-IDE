@@ -2,7 +2,7 @@
  * Pure theme data: one Monaco theme per app theme, derived from themes.ts tokens.
  * No Monaco import here, so it is unit-testable and keeps Monaco out of the initial bundle.
  */
-import { THEME_NAMES, themes, type ThemeName } from "../styles/themes";
+import { THEME_NAMES, themeStyles, themes, type ThemeName } from "../styles/themes";
 
 export interface MonacoThemeData {
   base: "vs" | "vs-dark";
@@ -20,7 +20,7 @@ export function buildMonacoTheme(name: ThemeName): MonacoThemeData {
   const t = themes[name];
   const kw = hex(t.kw), st = hex(t.st), fn = hex(t.fn), nu = hex(t.nu), cm = hex(t.cm);
   return {
-    base: name === "paper" ? "vs" : "vs-dark",
+    base: themeStyles[name].light ? "vs" : "vs-dark",
     inherit: true,
     rules: [
       { token: "", foreground: hex(t.text) },
