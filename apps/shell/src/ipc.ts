@@ -85,6 +85,7 @@ export type UiEvent =
   | { type: "turnEnd"; stopReason: string }
   | { type: "fsChanged"; paths: string[]; overflow: boolean }
   | { type: "gpu"; usedMiB: number; totalMiB: number }
+  | { type: "sys"; ramUsedMiB: number; ramTotalMiB: number; diskReadMBps: number }
   | { type: "agentTerminalOutput"; id: number; chunk: string }
   | { type: "agentTerminalTruncated"; id: number }
   | { type: "agentTerminalExit"; id: number; code: number | null }
@@ -107,6 +108,7 @@ export function describeEvent(ev: UiEvent): string {
     case "turnEnd": return "turnEnd";
     case "fsChanged": return "fsChanged";
     case "gpu": return "gpu";
+    case "sys": return "sys";
     case "agentTerminalOutput": return "agentTerminalOutput";
     case "agentTerminalTruncated": return "agentTerminalTruncated";
     case "agentTerminalExit": return "agentTerminalExit";

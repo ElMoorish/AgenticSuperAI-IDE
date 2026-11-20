@@ -62,6 +62,7 @@ export interface AgentState {
   usage: { prompt: number; completion: number; tps: number };
   approvals: Approval[];
   gpu?: { usedMiB: number; totalMiB: number };
+  sys?: { ramUsedMiB: number; ramTotalMiB: number; diskReadMBps: number };
   banner?: string;
   /** The last message is the assistant message of the turn in progress (chunks append to it). */
   streaming: boolean;
@@ -176,6 +177,8 @@ export function reduceAgent(s: AgentState, ev: AgentAction): AgentState {
       };
     case "gpu":
       return { ...s, gpu: { usedMiB: ev.usedMiB, totalMiB: ev.totalMiB } };
+    case "sys":
+      return { ...s, sys: { ramUsedMiB: ev.ramUsedMiB, ramTotalMiB: ev.ramTotalMiB, diskReadMBps: ev.diskReadMBps } };
     case "approval": {
       if (s.approvals.some((a) => a.id === ev.id)) return s; // the host replays pending ones on subscribe
       const { type: _t, ...a } = ev;

@@ -147,6 +147,58 @@ pub fn detect_servers_at(candidates: &[(&str, &str)]) -> Vec<DetectedServer> {
     handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
 }
 
+/// One reading of the machine's memory and storage.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SysSample {
+    pub ram_used_mib: u32,
+    pub ram_total_mib: u32,
+    /// Bytes read from all disks per second since the previous sample, in MB/s (decimal).
+    pub disk_read_mbps: f32,
+}
+
+/// Convert a byte count over an interval to MB/s; zero for an empty or invalid interval.
+pub fn mbps(bytes: u64, secs: f64) -> f32 {
+    if secs > 0.0 && secs.is_finite() {
+        (bytes as f64 / secs / 1_000_000.0) as f32
+    } else {
+        0.0
+    }
+}
+
+/// Keeps the previous sample so disk reads can be turned into a rate.
+pub struct SysMonitor {
+    sys: sysinfo::System,
+    disks: sysinfo::Disks,
+    last: std::time::Instant,
+}
+
+impl SysMonitor {
+    pub fn new() -> Self {
+        SysMonitor { sys: sysinfo::System::new(), disks: sysinfo::Disks::new_with_refreshed_list(), last: std::time::Instant::now() }
+    }
+
+    /// Blocking but quick (milliseconds).
+    pub fn sample(&mut self) -> SysSample {
+        self.sys.refresh_memory();
+        self.disks.refresh(true);
+        let now = std::time::Instant::now();
+        let secs = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        let read: u64 = self.disks.list().iter().map(|d| d.usage().read_bytes).sum();
+        SysSample {
+            ram_used_mib: (self.sys.used_memory() / 1_048_576) as u32,
+            ram_total_mib: (self.sys.total_memory() / 1_048_576) as u32,
+            disk_read_mbps: mbps(read, secs),
+        }
+    }
+}
+
+impl Default for SysMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Parse the first line of `nvidia-smi ... --format=csv,noheader,nounits`.
 pub fn parse_gpu_csv(s: &str) -> Option<(u32, u32)> {
     let line = s.lines().next()?;
@@ -205,4 +257,26 @@ pub fn gpu_memory() -> Option<(u32, u32)> {
         }
     }
     parse_gpu_csv(&reader.join().ok()?)
+}
+
+#[cfg(test)]
+mod sys_tests {
+    use super::*;
+
+    #[test]
+    fn mbps_converts_and_guards() {
+        assert_eq!(mbps(2_000_000, 2.0), 1.0);
+        assert_eq!(mbps(5, 0.0), 0.0);
+        assert_eq!(mbps(5, -1.0), 0.0);
+        assert_eq!(mbps(5, f64::NAN), 0.0);
+    }
+
+    #[test]
+    fn sample_reports_this_machines_memory() {
+        let mut m = SysMonitor::new();
+        let a = m.sample();
+        assert!(a.ram_total_mib > 0);
+        assert!(a.ram_used_mib <= a.ram_total_mib);
+        assert!(a.disk_read_mbps >= 0.0);
+    }
 }

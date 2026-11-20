@@ -42,7 +42,6 @@ export function Gauges({ state, contextSize }: { state: AgentState; contextSize:
           <i className="seg gpu" style={{ width: `${gpuFrac * 100}%` }} />
         </div>
       </div>
-      <SpeedGauge tps={state.usage.tps} />
     </div>
   );
 }

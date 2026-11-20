@@ -35,6 +35,16 @@ export function timeline(messages: Message[], steps: Step[]): TimelineItem[] {
   return out;
 }
 
+/** One plain sentence about what is happening now. */
+export function voiceLine(s: { turn: "idle" | "running" | "waiting"; steps: Step[]; approvals: unknown[] }): string {
+  if (s.turn === "waiting" || s.approvals.length > 0) return "Waiting for your OK";
+  if (s.turn === "running") {
+    const running = [...s.steps].reverse().find((st) => st.status === "run");
+    return running ? running.title : "Thinking";
+  }
+  return "Ready";
+}
+
 export function AgentPanel({ collapsed }: { collapsed: boolean }) {
   const { state, contextSize, mode, dispatch, setMode, send, cancel, resolve } = useAgent();
   const hasWorkspace = useStore((s) => !!s.workspace.info);
@@ -73,6 +83,7 @@ export function AgentPanel({ collapsed }: { collapsed: boolean }) {
             {state.turn === "running" ? "Working…" : state.turn === "waiting" ? "Waiting for you" : ""}
           </span>
         </div>
+        <p className="avoice" aria-live="off">{voiceLine(state)}</p>
         <Gauges state={state} contextSize={contextSize} />
       </div>
       {state.banner && (

@@ -13,6 +13,7 @@ import { SettingsDialog } from "../settings/SettingsDialog";
 import { useSettingsDialog } from "../settings/dialogStore";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { TitleBar } from "./TitleBar";
+import { EngineStrip } from "../ui/EngineStrip";
 
 /**
  * Workbench grid (Tasks 9-13 fill the regions):
@@ -81,6 +82,7 @@ export function Shell() {
       {split("agent", "Resize agent panel", "vertical", -1)}
       <AgentPanel collapsed={collapsed.agent} />
 
+      <EngineStrip />
       <StatusBar />
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {paletteOpen && <CommandPalette />}

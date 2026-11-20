@@ -171,6 +171,15 @@ pub enum UiEvent {
         #[serde(rename = "totalMiB")]
         total_mib: u32,
     },
+    /// Memory and storage load, about every 2 s: RAM in MiB, disk reads in MB/s.
+    Sys {
+        #[serde(rename = "ramUsedMiB")]
+        ram_used_mib: u32,
+        #[serde(rename = "ramTotalMiB")]
+        ram_total_mib: u32,
+        #[serde(rename = "diskReadMBps")]
+        disk_read_mbps: f32,
+    },
     AgentTerminalOutput {
         id: u64,
         chunk: String,
@@ -1678,6 +1687,25 @@ pub async fn run_gpu_loop(state: Arc<AppState>) {
     }
 }
 
+/// Emit `Sys` events every ~2 s while a window listener exists.
+pub async fn run_sys_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(GPU_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mon = Arc::new(std::sync::Mutex::new(probe::SysMonitor::new()));
+    loop {
+        tick.tick().await;
+        if !state.has_sink() {
+            continue;
+        }
+        let m = mon.clone();
+        if let Ok(x) = tokio::task::spawn_blocking(move || m.lock().map(|mut g| g.sample()).ok()).await {
+            if let Some(x) = x {
+                state.emit(UiEvent::Sys { ram_used_mib: x.ram_used_mib, ram_total_mib: x.ram_total_mib, disk_read_mbps: x.disk_read_mbps });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1830,6 +1858,8 @@ mod tests {
         assert_eq!(v, json!({"type":"turnEnd","stopReason":"end_turn"}));
         let v = serde_json::to_value(UiEvent::Gpu { used_mib: 1, total_mib: 8 }).unwrap();
         assert_eq!(v, json!({"type":"gpu","usedMiB":1,"totalMiB":8}));
+        let v = serde_json::to_value(UiEvent::Sys { ram_used_mib: 100, ram_total_mib: 200, disk_read_mbps: 1.5 }).unwrap();
+        assert_eq!(v, json!({"type":"sys","ramUsedMiB":100,"ramTotalMiB":200,"diskReadMBps":1.5}));
         let v = serde_json::to_value(UiEvent::Approval {
             id: 3, kind: "command".into(), title: "run".into(), old: None, new: None, command: Some("cargo test".into()),
         }).unwrap();

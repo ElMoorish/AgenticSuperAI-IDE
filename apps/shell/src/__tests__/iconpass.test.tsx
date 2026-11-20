@@ -82,3 +82,36 @@ describe("terminal colours", () => {
     applyTheme("voltage");
   });
 });
+
+import { EngineStrip, cellsForBurst, pipeSeconds } from "../ui/EngineStrip";
+import { voiceLine } from "../agent/AgentPanel";
+import { initialAgentState, reduceAgent } from "../agent/agentStore";
+
+describe("engine strip", () => {
+  it("burst size is bounded and zero for nothing", () => {
+    expect(cellsForBurst(0)).toBe(0);
+    expect(cellsForBurst(-5)).toBe(0);
+    expect(cellsForBurst(1)).toBe(1);
+    expect(cellsForBurst(10000)).toBe(24);
+  });
+  it("pipes stand still without disk traffic and speed up with it", () => {
+    expect(pipeSeconds(undefined)).toBeNull();
+    expect(pipeSeconds(0.5)).toBeNull();
+    expect(pipeSeconds(2000)!).toBeLessThan(pipeSeconds(10)!);
+  });
+  it("renders honest text when nothing is measured yet", () => {
+    render(<EngineStrip />);
+    expect(screen.getByText("Token stream")).toBeTruthy();
+    expect(screen.getAllByText("no data").length).toBeGreaterThan(0);
+  });
+  it("voice line says what is happening", () => {
+    expect(voiceLine({ turn: "idle", steps: [], approvals: [] })).toBe("Ready");
+    expect(voiceLine({ turn: "running", steps: [], approvals: [] })).toBe("Thinking");
+    expect(voiceLine({ turn: "running", steps: [{ id: 1, seq: 1, title: "Read a.txt", status: "run" }] as never, approvals: [] })).toBe("Read a.txt");
+    expect(voiceLine({ turn: "waiting", steps: [], approvals: [] })).toBe("Waiting for your OK");
+  });
+  it("sys events reach the state", () => {
+    const n = reduceAgent(initialAgentState(), { type: "sys", ramUsedMiB: 100, ramTotalMiB: 200, diskReadMBps: 5 } as never);
+    expect(n.sys).toEqual({ ramUsedMiB: 100, ramTotalMiB: 200, diskReadMBps: 5 });
+  });
+});

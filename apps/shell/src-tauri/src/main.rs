@@ -3,7 +3,7 @@
 mod commands;
 mod state;
 
-use state::{locate_agent_exe, run_gpu_loop, run_pump, AppState};
+use state::{locate_agent_exe, run_gpu_loop, run_pump, run_sys_loop, AppState};
 use std::sync::Arc;
 use tauri::{Manager, RunEvent};
 
@@ -29,6 +29,7 @@ fn main() {
             let rx = state.take_event_rx().expect("event receiver taken once");
             tauri::async_runtime::spawn(run_pump(rx, state.sink_slot()));
             tauri::async_runtime::spawn(run_gpu_loop(state.clone()));
+            tauri::async_runtime::spawn(run_sys_loop(state.clone()));
             app.manage(state);
             Ok(())
         })
