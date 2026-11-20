@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASA IDE · Voltage v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0d26; --chrome:#070819; --panel:#10133a; --raise:#191d52; --line:#2a2f78; --line2:#3a41a0;
+  --text:#eceeff; --muted:#8e94d6; --mag:#ff3d9a; --cy:#2de2ff; --lime:#b6ff4d; --amber:#ffd23d;
+  --add:#0f3d4a; --del:#4a1636;
+  --kw:#ff7ac0; --st:#7dffd0; --fn:#2de2ff; --nu:#ffd23d; --cm:#5b62b0;
+  --ui:"Archivo",system-ui,sans-serif; --mono:"JetBrains Mono",Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:400 13px/1.4 var(--ui);overflow:hidden}
+.ide{height:100vh;display:grid;grid-template-columns:196px 1fr 330px;grid-template-rows:40px 1fr 188px 28px}
+/* title */
+.title{grid-column:1/-1;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px}
+.brand{display:flex;align-items:center;gap:9px;font:800 15px var(--ui);font-stretch:112%;letter-spacing:.01em}
+.brand svg{width:22px;height:22px}
+.brand span{color:var(--muted);font-weight:500;font-stretch:100%}
+.sp{flex:1}
+.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel);border-radius:4px;padding:4px 10px;font:500 12px var(--ui);color:var(--muted)}
+.chip b{color:var(--text);font-weight:600}
+.led{width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime);animation:led 1.6s ease-in-out infinite}
+@keyframes led{50%{opacity:.35;transform:scale(.7)}}
+/* sidebar */
+.side{background:var(--panel);border-right:1px solid var(--line);padding:12px 8px}
+.side h4{font:700 11px var(--ui);font-stretch:112%;color:var(--muted);padding:0 8px 8px}
+.row{display:flex;gap:8px;align-items:center;padding:5px 8px;border-radius:4px;color:var(--muted)}
+.row i{width:6px;height:6px;border-radius:1px;background:var(--line2)}
+.row.on{background:var(--raise);color:var(--text);box-shadow:inset 3px 0 var(--mag)}
+.row.on i{background:var(--mag)}
+.row.d1{padding-left:22px}
+/* editor */
+.editor{min-width:0;display:flex;flex-direction:column}
+.tabs{display:flex;background:var(--chrome);border-bottom:1px solid var(--line)}
+.tab{padding:9px 16px;color:var(--muted);border-right:1px solid var(--line)}
+.tab.on{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px var(--mag)}
+.code{flex:1;padding:12px 0;font:400 12.5px/1.75 var(--mono);overflow:hidden}
+.ln{display:flex}.ln i{width:46px;text-align:right;padding-right:16px;color:var(--cm);font-style:normal}
+.ln.add{background:var(--add)}.ln.del{background:var(--del)}
+.k{color:var(--kw)}.s{color:var(--st)}.f{color:var(--fn)}.n{color:var(--nu)}.c{color:var(--cm);font-style:italic}
+/* agent */
+.agent{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.voice{padding:14px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:44px 1fr;gap:12px;align-items:center}
+.core{width:44px;height:44px;position:relative}
+.core svg{width:44px;height:44px;overflow:visible}
+.core .r1{transform-origin:center;animation:spin 9s linear infinite}
+.core .r2{transform-origin:center;animation:spin 5s linear infinite reverse}
+.core .dot{animation:throb 1.2s ease-in-out infinite;transform-origin:center}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes throb{50%{transform:scale(1.35)}}
+.voice h3{font:800 14px var(--ui);font-stretch:112%}
+.voice p{color:var(--muted);font:500 12px var(--mono);margin-top:2px;min-height:16px}
+.voice p::after{content:"▌";color:var(--mag);animation:blink 1s steps(1) infinite;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+.chat{flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:12px}
+.you{align-self:flex-end;background:var(--raise);border-radius:6px;padding:8px 12px;max-width:88%}
+.say{font-size:14px;line-height:1.55}
+.tool{display:flex;gap:8px;font:500 12px var(--mono);color:var(--muted)}
+.tool b{color:var(--cy);font-weight:500}
+.card{border:1px solid var(--line2);background:var(--raise);border-radius:6px;padding:12px;display:grid;gap:10px;transition:transform .35s cubic-bezier(.3,.7,.2,1),opacity .3s,max-height .35s;max-height:220px;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--mag)}
+.card.gone{transform:translateX(24px);opacity:0;max-height:0;padding:0;border-width:0}
+.card h5{font:700 12px var(--ui);font-stretch:108%;display:flex;justify-content:space-between}
+.card h5 em{font:400 11px var(--mono);font-style:normal;color:var(--lime)}
+.diff{font:400 11.5px/1.6 var(--mono);border-radius:3px;overflow:hidden}
+.diff div{padding:1px 8px}.diff .a{background:var(--add)}.diff .r{background:var(--del)}
+.btns{display:flex;gap:8px}
+.btn{font:700 12px var(--ui);border-radius:4px;padding:7px 16px;border:1px solid var(--line2);background:transparent;color:var(--text);cursor:pointer}
+.btn.pri{background:var(--mag);border-color:transparent;color:#fff;box-shadow:0 0 18px #ff3d9a66}
+.btn:focus-visible{outline:2px solid var(--cy);outline-offset:2px}
+.btn:active{transform:translateY(1px)}
+.applied{display:none;color:var(--lime);font:500 12px var(--mono)}
+.applied.on{display:block;animation:pop .35s cubic-bezier(.3,.9,.3,1.3)}
+@keyframes pop{from{transform:scale(.92);opacity:0}}
+.compose{border-top:1px solid var(--line);padding:10px 12px;display:flex;gap:8px}
+.compose div{flex:1;background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:9px 12px;color:var(--muted)}
+/* engine */
+.engine{grid-column:1/-1;display:grid;grid-template-columns:1.25fr 1fr 1fr;border-top:1px solid var(--line);background:var(--chrome)}
+.pane{padding:10px 14px;border-right:1px solid var(--line);min-width:0;display:flex;flex-direction:column;gap:6px}
+.pane:last-child{border-right:0}
+.pane h6{font:700 11px var(--ui);font-stretch:112%;color:var(--muted);display:flex;justify-content:space-between}
+.pane h6 b{color:var(--text);font:500 11px var(--mono)}
+#heat{width:100%;flex:1;min-height:0;display:block}
+#spark{width:100%;flex:1;min-height:0;display:block}
+.tiers{flex:1;display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:6px;font:500 11px var(--mono)}
+.tier{border:1px solid var(--line2);border-radius:5px;padding:8px 6px;text-align:center;background:var(--panel)}
+.tier b{display:block;font:700 15px var(--ui);color:var(--text)}
+.tier small{color:var(--muted)}
+.tier .bar{height:4px;border-radius:9px;background:var(--line);margin-top:6px;overflow:hidden}
+.tier .bar u{display:block;height:100%;background:linear-gradient(90deg,var(--cy),var(--mag))}
+.pipe{width:46px;height:8px;position:relative;overflow:hidden;border-radius:9px;background:var(--line)}
+.pipe::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,var(--cy) 0 6px,transparent 6px 14px);animation:flow 1s linear infinite;opacity:.9}
+@keyframes flow{to{background-position:14px 0}}
+/* status */
+.status{grid-column:1/-1;background:var(--chrome);border-top:1px solid var(--line);display:flex;align-items:center;gap:20px;padding:0 14px;color:var(--muted);font:400 11.5px var(--mono)}
+.status b{color:var(--text);font-weight:500}
+@media (max-width:900px){.ide{grid-template-columns:1fr;grid-template-rows:40px 1fr 188px 28px}.side,.agent{display:none}.engine{grid-template-columns:1fr}.pane:nth-child(n+2){display:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="ide">
+  <header class="title">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff3d9a"/><stop offset="1" stop-color="#2de2ff"/></linearGradient></defs>
+        <path d="M16 2 29 9v14L16 30 3 23V9z" fill="none" stroke="url(#g)" stroke-width="2.4" stroke-linejoin="round"/>
+        <path d="M9 21 16 8l7 13" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="21" r="2" fill="#b6ff4d"/></svg>
+      ASA <span>wordcount</span>
+    </div>
+    <span class="sp"></span>
+    <span class="chip"><span class="led"></span><b>Qwen3.5 35B</b> · runs on this PC</span>
+    <span class="chip">Build mode</span>
+  </header>
+
+  <nav class="side">
+    <h4>PROJECT</h4>
+    <div class="row"><i></i>src</div>
+    <div class="row d1 on"><i></i>main.py</div>
+    <div class="row d1"><i></i>counter.py</div>
+    <div class="row"><i></i>README.md</div>
+  </nav>
+
+  <main class="editor">
+    <div class="tabs"><div class="tab on">main.py</div><div class="tab">README.md</div></div>
+    <div class="code">
+      <div class="ln"><i>1</i><span><span class="k">import</span> sys</span></div>
+      <div class="ln"><i>2</i><span></span></div>
+      <div class="ln"><i>3</i><span><span class="k">def</span> <span class="f">count_words</span>(path):</span></div>
+      <div class="ln"><i>4</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="c"># read once, split on any whitespace</span></span></div>
+      <div class="ln"><i>5</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">with</span> <span class="f">open</span>(path) <span class="k">as</span> fh:</span></div>
+      <div class="ln del"><i>6</i><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> <span class="f">len</span>(fh.read().split(<span class="s">" "</span>))</span></div>
+      <div class="ln add"><i>6</i><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> <span class="f">len</span>(fh.read().split())</span></div>
+      <div class="ln"><i>7</i><span></span></div>
+      <div class="ln"><i>8</i><span><span class="k">if</span> __name__ == <span class="s">"__main__"</span>:</span></div>
+      <div class="ln"><i>9</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="f">print</span>(<span class="f">count_words</span>(sys.argv[<span class="n">1</span>]))</span></div>
+    </div>
+  </main>
+
+  <aside class="agent">
+    <div class="voice">
+      <div class="core" aria-hidden="true"><svg viewBox="0 0 44 44">
+        <circle class="r1" cx="22" cy="22" r="19" fill="none" stroke="#ff3d9a" stroke-width="2" stroke-dasharray="18 10"/>
+        <circle class="r2" cx="22" cy="22" r="13" fill="none" stroke="#2de2ff" stroke-width="2" stroke-dasharray="8 8"/>
+        <circle class="dot" cx="22" cy="22" r="5" fill="#b6ff4d"/></svg></div>
+      <div><h3>Working on it</h3><p id="voice">Reading src/main.py</p></div>
+    </div>
+    <div class="chat">
+      <div class="you">Count words correctly when there are double spaces.</div>
+      <div class="tool"><b>read</b> src/main.py · 9 lines</div>
+      <div class="say">Splitting on one space counts empty strings between double spaces. Splitting on any whitespace fixes it.</div>
+      <div class="card" id="card">
+        <h5>Edit src/main.py <em>+1 −1</em></h5>
+        <div class="diff"><div class="r">- return len(fh.read().split(" "))</div><div class="a">+ return len(fh.read().split())</div></div>
+        <div class="btns"><button class="btn pri" id="ok">Accept</button><button class="btn" id="no">Reject</button></div>
+      </div>
+      <div class="applied" id="applied">✓ Applied to src/main.py</div>
+    </div>
+    <div class="compose"><div>Tell the agent what to build…</div><button class="btn pri">Send</button></div>
+  </aside>
+
+  <section class="engine" aria-label="Engine">
+    <div class="pane"><h6>EXPERTS AWAKE THIS TOKEN <b>8 of 256 · layer 17</b></h6><canvas id="heat"></canvas></div>
+    <div class="pane"><h6>SPEED <b><span id="tps">6.4</span> tok/s</b></h6><canvas id="spark"></canvas></div>
+    <div class="pane"><h6>WHERE THE MODEL LIVES <b>1.8 GB/s from disk</b></h6>
+      <div class="tiers">
+        <div class="tier"><small>DISK</small><b>18 GB</b><div class="bar"><u style="width:100%"></u></div></div><div class="pipe"></div>
+        <div class="tier"><small>RAM</small><b>9.7 GB</b><div class="bar"><u style="width:61%"></u></div></div><div class="pipe"></div>
+        <div class="tier"><small>GPU</small><b>6.2 GB</b><div class="bar"><u style="width:78%"></u></div></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="status"><span>context <b>4.1k / 32k</b></span><span class="sp"></span><span>nothing leaves this machine</span></footer>
+</div>
+
+<script>
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const card=document.getElementById("card"), applied=document.getElementById("applied");
+document.getElementById("ok").onclick=()=>{card.classList.add("gone");applied.classList.add("on");};
+document.getElementById("no").onclick=()=>card.classList.add("gone");
+/* agent voice: says what it is doing in plain words */
+const lines=["Reading src/main.py","Thinking · 212 tokens","Drafting an edit","Waiting for your OK"];let li=0;
+setInterval(()=>{document.getElementById("voice").textContent=lines[li=(li+1)%lines.length]},2600);
+/* expert heat map: 256 experts, 8 light up per token, with a fading trail */
+const hv=document.getElementById("heat"),hc=hv.getContext("2d");const COLS=32,ROWS=8,heat=new Float32Array(256);
+function pickExperts(){for(let i=0;i<8;i++){heat[(Math.random()*256)|0]=1;}}
+let tokClock=0,speed=6.4,hist=Array.from({length:60},(_,i)=>6.4+Math.sin(i/5)*1.5);
+function fit(c){const d=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;if(c.width!==w*d||c.height!==h*d){c.width=w*d;c.height=h*d}const x=c.getContext("2d");x.setTransform(d,0,0,d,0,0);return[x,w,h]}
+function drawHeat(){const[x,w,h]=fit(hv);x.clearRect(0,0,w,h);const cw=w/COLS,ch=h/ROWS,g=Math.min(cw,ch)*.16;
+  for(let i=0;i<256;i++){const cx=(i%COLS)*cw,cy=((i/COLS)|0)*ch,v=heat[i];
+    x.fillStyle=v>.02?`rgba(${255*(1-v)+45*v|0},${61+(226-61)*v|0},${154+(255-154)*v|0},${.25+.75*v})`:"#161a4a";
+    x.beginPath();x.roundRect(cx+g,cy+g,cw-2*g,ch-2*g,2);x.fill();
+    if(v>.7){x.shadowColor="#2de2ff";x.shadowBlur=10;x.fill();x.shadowBlur=0}
+    heat[i]=Math.max(0,v-.022)}}
+/* tok/s sparkline with a live head */
+const sv=document.getElementById("spark");
+function drawSpark(){const[x,w,h]=fit(sv);x.clearRect(0,0,w,h);const max=12,pad=6;
+  x.strokeStyle="#2a2f78";x.lineWidth=1;for(let i=1;i<4;i++){x.beginPath();x.moveTo(0,h*i/4);x.lineTo(w,h*i/4);x.stroke()}
+  const pt=(v,i)=>[i/(hist.length-1)*w,h-pad-(v/max)*(h-2*pad)];
+  const g=x.createLinearGradient(0,0,0,h);g.addColorStop(0,"#ff3d9a55");g.addColorStop(1,"#ff3d9a00");
+  x.beginPath();hist.forEach((v,i)=>{const[a,b]=pt(v,i);i?x.lineTo(a,b):x.moveTo(a,b)});
+  x.lineTo(w,h);x.lineTo(0,h);x.closePath();x.fillStyle=g;x.fill();
+  x.beginPath();hist.forEach((v,i)=>{const[a,b]=pt(v,i);i?x.lineTo(a,b):x.moveTo(a,b)});x.strokeStyle="#ff3d9a";x.lineWidth=2;x.stroke();
+  const[hx,hy]=pt(hist[hist.length-1],hist.length-1);x.fillStyle="#b6ff4d";x.shadowColor="#b6ff4d";x.shadowBlur=12;x.beginPath();x.arc(hx-3,hy,3.5,0,7);x.fill();x.shadowBlur=0}
+let last=performance.now();
+function frame(t){const dt=(t-last)/1000;last=t;
+  if(!reduce){tokClock+=dt*speed;while(tokClock>=1){tokClock-=1;pickExperts()}
+    speed=6.4+Math.sin(t/2600)*1.8+Math.sin(t/700)*.4;
+    if((t|0)%6<2&&Math.random()<.2){hist.push(speed);hist.shift()}
+    document.getElementById("tps").textContent=speed.toFixed(1)}
+  drawHeat();drawSpark();requestAnimationFrame(frame)}
+pickExperts();requestAnimationFrame(frame);
+</script>
+</body>
+</html>
