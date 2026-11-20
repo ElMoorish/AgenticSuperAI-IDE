@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { AgentPanel } from "../agent/AgentPanel";
+import { ApprovalBot } from "../agent/ApprovalBot";
 import { EditorArea } from "../editor/EditorArea";
 import { FileTree } from "../files/FileTree";
 import { LIMITS, useStore, type PanelKey } from "../state/store";
@@ -79,6 +80,7 @@ export function Shell() {
       <AgentPanel collapsed={collapsed.agent} />
 
       <StatusBar />
+      <ApprovalBot />
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {paletteOpen && <CommandPalette />}
     </div>
