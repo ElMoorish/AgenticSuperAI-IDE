@@ -158,13 +158,23 @@ pub fn known_roots(home: &Path) -> Vec<(PathBuf, &'static str)> {
     ]
 }
 
+/// `<mount>/models` for each drive or mount point that has one (the usual place people keep GGUF files).
+pub fn mount_model_dirs(mounts: &[PathBuf]) -> Vec<PathBuf> {
+    mounts.iter().map(|m| m.join("models")).filter(|p| p.is_dir()).collect()
+}
+
 /// Everything found: the user's own folders, the known tool folders, and Ollama's store.
 pub fn find_models(home: Option<&Path>, extra_dirs: &[PathBuf]) -> Vec<LocalModel> {
     let mut all: Vec<LocalModel> = Vec::new();
     for d in extra_dirs {
         all.extend(scan_dir(d, "folder"));
     }
+    let mounts: Vec<PathBuf> = sysinfo::Disks::new_with_refreshed_list().list().iter().map(|d| d.mount_point().to_path_buf()).collect();
+    for d in mount_model_dirs(&mounts) {
+        all.extend(scan_dir(&d, "folder"));
+    }
     if let Some(h) = home {
+        all.extend(scan_dir(&h.join("models"), "folder"));
         for (d, src) in known_roots(h) {
             all.extend(scan_dir(&d, src));
         }
@@ -331,6 +341,15 @@ pub fn suggest(size_bytes: u64, vram_mib: Option<u32>, info: &GgufInfo) -> Sugge
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn drive_roots_with_a_models_folder_are_scanned() {
+        let d = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("models")).unwrap();
+        let v = mount_model_dirs(&[d.path().to_path_buf(), other.path().to_path_buf()]);
+        assert_eq!(v, vec![d.path().join("models")]);
+    }
 
     #[test]
     fn quant_tags() {
