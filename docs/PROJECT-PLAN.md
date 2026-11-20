@@ -223,7 +223,7 @@ MoE offload comparison; Agent integration and a small end-to-end task study; Lim
 | Small local models fumble tool calls (seen with 9B and 4B) | Model manager recommends a coder-tuned model; keep text tool fallback and loop guard |
 | Windows-specific issues (installer, antivirus locks) | Document; test the installer on a clean VM |
 
-## 6. Heavy-model benchmarks and bottleneck findings (2026-11-20)
+## 7. Heavy-model benchmarks and bottleneck findings (2026-11-20)
 
 Machine: RTX 4060 8 GB, Ryzen 5 5600X (6c/12t), 16 GB RAM (about 4 GB free), NVMe E: drive. `llama-bench` build 12359,
 `-p 128 -n 32 -r 2 -ngl 99 -fa 1`, memory-mapped model unless noted. Numbers are tok/s; the first Qwen3.6 run was cold.
