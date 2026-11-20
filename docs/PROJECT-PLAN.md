@@ -150,6 +150,12 @@ slow last request overlapped heavy disk use by the download, so treat it as a wo
 not for interactive back-and-forth.
 Not measured: other `-ngl` values, a non-MTP file, MTP without the background download.
 
+Bottleneck status for the 27B: HYPOTHESIS ONLY, not profiled. The file (18.5 GB) is larger than free RAM (about 5 GB), so most weights are
+read from the NVMe drive for every token; 1.4 tok/s x ~17 GB is about 24 GB/s of weight reads per second only if all were streamed, which is
+far above the drive, so the real split between GPU layers, RAM cache and disk is unknown. To check later: disk read rate and GPU use during
+generation, `-ngl` sweep, KV cache size, `--no-mmap`, and a run with nothing else using the disk. The 27B files were deleted after these
+numbers were recorded, so any re-test needs a re-download (about 19 GB).
+
 ### 3.7 Working conclusions (and their limits)
 1. Decode speed of any streaming approach is bounded by (bytes read per token) / (storage bandwidth). Dense 27B on this machine is
    expected at several seconds per token however well tuned (**estimate**, from 3.1 and 3.2, not measured on a 27B).
