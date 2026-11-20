@@ -1,5 +1,7 @@
 # ASA Agentic Super AI IDE
 
+MIT licensed. A local-first agentic IDE: the model runs on your machine, nothing is sent to a cloud.
+
 Local-first agentic IDE for an RTX 4060 (8 GB) / 16 GB RAM / Windows machine.
 Design: `docs/Merged Local Agentic IDE Architecture.docx` (merges the two earlier docs and the Betelgeuse video).
 
@@ -55,3 +57,19 @@ cargo build -p agent-core --release && cd apps/shell && npm run tauri build   # 
 ```
 
 Manual verification on a real machine and model: `docs/shell-checklist.md`.
+
+
+## Local models: GGUF and safetensors
+
+The IDE talks to any OpenAI-compatible server, and its Models dialog (the model chip in the title bar, or the boxes icon in
+the left bar) can find and start two kinds of models:
+
+| | GGUF files | Hugging Face safetensors folders |
+|---|---|---|
+| Engine | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` | [AirLLM](https://github.com/lyogavin/airllm), through `tools/airllm-server` |
+| Best for | Daily use. Mixture-of-experts models can keep experts in system memory (`--n-cpu-moe`) | Trying models far larger than your GPU or RAM, at a large cost in speed |
+| Suggested settings | Read from the GGUF header (layers, experts, context) and your GPU memory | Plain-words speed estimate (the model is re-read from disk for every token) |
+
+The dialog scans folders you add, Ollama, LM Studio, the Hugging Face cache and a `models` folder on each drive. It starts the
+engine, shows the log while loading and connects the IDE when the server is ready. Setup for AirLLM: `tools/airllm-server/README.md`.
+Measured results and the bottleneck analysis: `docs/PROJECT-PLAN.md` (section 7).

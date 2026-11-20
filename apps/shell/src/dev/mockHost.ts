@@ -56,7 +56,7 @@ export function installMockHost(): void {
       { name: "llama3:8b", path: "demo/blob", size_bytes: 4.7e9, quant: null, source: "ollama", mmproj: null, kind: "gguf" },
       { name: "Qwen3.8-40B", path: "demo/q40", size_bytes: 79.9e9, quant: null, source: "folder", mmproj: null, kind: "safetensors" },
     ],
-    find_airllm: () => ({ python: "E:/airllm-test/venv/Scripts/python.exe", server: "E:/repo/tools/airllm-server/server.py" }),
+    find_airllm: () => ({ python: "/path/to/venv/Scripts/python.exe", server: "/path/to/tools/airllm-server/server.py" }),
     find_engines: () => [{ name: "llama-server", path: "C:/llama.cpp/llama-server.exe" }],
     model_info: () => ({ info: { block_count: 40, expert_count: 128, context_length: 262144 }, suggestion: { ngl: 99, n_cpu_moe: 28, ctx: 16384, fits_gpu: false }, vramMib: 8188 }),
     launch_model: () => null,

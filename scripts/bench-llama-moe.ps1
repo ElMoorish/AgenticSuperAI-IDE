@@ -1,9 +1,9 @@
 # Benchmarks one MoE GGUF under different expert-offload settings with llama-bench.
-# Usage: .\scripts\bench-llama-moe.ps1 -Model E:\models\olmoe\olmoe-1b-7b-0924-instruct-q4_k_m.gguf
+# Usage: .\scripts\bench-llama-moe.ps1 -Model <path\to\model.gguf>
 # Prints prompt-processing (pp) and token-generation (tg) tokens/s per configuration.
 param(
   [Parameter(Mandatory = $true)][string]$Model,
-  [string]$Bench = "E:\tools\llama.cpp\llama-bench.exe",
+  [string]$Bench = "llama-bench",   # on PATH, or give the full path
   [int]$Prompt = 128,
   [int]$Gen = 32,
   [int]$Repeats = 3,
