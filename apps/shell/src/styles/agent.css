@@ -259,3 +259,10 @@ body.overlay { margin: 0; overflow: hidden; background: var(--raise); }
 .mgrid .sfield input { min-width: 0; width: 100%; box-sizing: border-box; }
 .mlog { margin: 0; max-height: 9rem; overflow: auto; padding: 0.5rem; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); font: 0.6875rem var(--font-mono); color: var(--muted); white-space: pre-wrap; }
 @media (max-width: 700px) { .mgrid { grid-template-columns: 1fr 1fr; } }
+
+/* engine strip: panes must never outgrow the strip (canvas and svg have intrinsic heights) */
+.engine { grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.epane { min-height: 0; overflow: hidden; box-sizing: border-box; }
+.smap { flex: 1 1 0; height: 0; min-height: 0; }
+.epane .gauge.speed .spark { flex: 1 1 0; height: 0; min-height: 0; }
+.tiers { flex: 1 1 0; }
